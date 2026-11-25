@@ -13,34 +13,24 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.core.app_config import app_config_path
+from src.core.tool_paths import MKVTOOLNIX_TOOLS, TOOL_DIRECTORY_NAMES, portable_runtime_paths
 from tools.macos_build_support import ROOT, Build, message, run
 from tools.macos_bundle import archive, archive_name, assemble, build_assets
 from tools.macos_media import build_media, hdr_providers, releases
 from tools.macos_plugins import build_plugins, plugin_releases
 from tools.macos_python_runtime import build_python, python_releases
-
+from tools.setup_tool_paths import prepare_tool_paths, read_tool_paths
 from tools.vapoursynth_plugin_releases import SOURCES, PluginRelease, latest_tag
 
 
-def desktop(ctx):
-    from src.core.app_config import app_config_path, load_app_config
-    from src.core.tool_paths import (
-        MKVTOOLNIX_TOOLS,
-        TOOL_DIRECTORY_NAMES,
-        portable_runtime_paths,
-        resolve_tool_paths,
-    )
-
+def desktop(ctx, target: Path, config_path: Path, configured: dict[str, str]) -> None:
     from src.runtime.macos_shortcuts import refresh_source_launchers
 
-    directory = Path.home() / "Library/Application Support/BluraySubtitle"
+    directory = target.parent
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "Runtime"
     if target.exists() and not (target / "runtime.json").is_file():
         raise FileExistsError(f"Existing unmanaged directory: {target}")
-    config_path = app_config_path()
-    config = load_app_config(config_path)
-    configured = resolve_tool_paths(config.tools, config_path.parent, discover=False)
     with tempfile.TemporaryDirectory(dir=directory) as tmp:
         work = Path(tmp)
         staged = work / "Runtime"
@@ -68,14 +58,14 @@ def desktop(ctx):
     refresh_source_launchers(target)
     # Explicit user paths can point to independently maintained programs. Populate
     # missing destinations with links into the verified installation.
-    defaults = {k: path for k, path in portable_runtime_paths(target).items() if k not in TOOL_DIRECTORY_NAMES}
-    for k, v in MKVTOOLNIX_TOOLS.items():
-        defaults[k] = target / "bin" / v
-    links = [(Path(configured[k]), src) for k, src in defaults.items() if configured.get(k)]
-    if configured.get("PLUGIN_PATH"):
-        links.extend((Path(configured["PLUGIN_PATH"]) / p.name, p) for p in (target / "plugins").iterdir())
+    defaults = portable_runtime_paths(target)
+    links = [(Path(configured[name]), src) for name, src in defaults.items() if name not in TOOL_DIRECTORY_NAMES]
+    mkv_directory = Path(configured["MKVTOOLNIX_PATH"])
+    links.extend((mkv_directory / program, defaults["MKVTOOLNIX_PATH"] / program) for program in MKVTOOLNIX_TOOLS.values())
+    plugin_directory = Path(configured["PLUGIN_PATH"])
+    links.extend((plugin_directory / src.name, src) for src in defaults["PLUGIN_PATH"].iterdir())
     for dest, src in links:
-        if dest.exists():
+        if dest == src or dest.exists():
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.symlink_to(src)
@@ -96,6 +86,21 @@ def main():
     cache = Path(os.environ["BLURAY_SETUP_CACHE_DIR"]).expanduser().resolve()
     with (cache / "setup.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.mode == "Desktop" and args.plan is None:
+            runtime = Path.home() / "Library/Application Support/BluraySubtitle/Runtime"
+            config_path = app_config_path()
+            defaults = {name: str(path) for name, path in portable_runtime_paths(runtime).items()}
+            try:
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                if prepare_tool_paths(config_path, defaults=defaults):
+                    input(message("Edit config.json to change any paths. Press Enter when ready to continue.") + "\n")
+                locale = os.environ.get("BLURAY_LANG") or os.environ.get("LANG", "en")
+                _, configured = read_tool_paths(config_path, "zh" if locale.lower().startswith("zh") else "en")
+            except EOFError:
+                parser.exit(1, message("Tool paths were not confirmed.") + "\n")
+            except (OSError, ValueError) as error:
+                parser.exit(1, message("Could not read setup tool paths from {path}. {error}",
+                                       path=config_path, error=error) + "\n")
         plan = json.loads(args.from_plan.read_text()) if args.from_plan else None
         ctx = Build(cache, args.restore_only, planning=bool(args.plan), expected=plan["components"] if plan else None)
         dest = Path(os.environ.get("BLURAY_MACOS_OUTPUT_DIR", ROOT / "dist")).resolve()
@@ -135,7 +140,7 @@ def main():
             raise ValueError("The build components changed after resolving the cache plan")
         ctx.versions = sources
         if args.mode == "Desktop":
-            desktop(ctx)
+            desktop(ctx, runtime, config_path, configured)
         else:
             from tools.verify_macos_package import verify_archive
 

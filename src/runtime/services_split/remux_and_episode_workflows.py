@@ -1754,6 +1754,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 video_progress_name or os.path.basename(row.output_path)
             ).strip()
             choice = row.video_encode or cpu_choice
+            cpu_command = request.settings.cpu_command if choice.device is None else None
+            if isinstance(cpu_command, str):
+                # A completed output may have disappeared after preflight.
+                cpu_command = request.settings.resolve_cpu_command()
+                require_tool_path("FFPROBE_PATH")
             row_service.encode_task(
                 row.output_path,
                 row.vpy_path,
@@ -1763,6 +1768,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 encoder=choice.encoder,
                 bit_depth=choice.bit_depth,
                 hardware_device=choice.device,
+                cpu_command=cpu_command,
+                chroma_format=choice.chroma_format,
                 selected_audio_tracks=(
                     row.audio_tracks if request.input_mode == 'remux' else None
                 ),
@@ -1979,25 +1986,22 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             try:
                 if video:
                     video_name = os.path.basename(row.sp_entry.output_name) if is_sp and row.sp_entry else ''
-                    # VPy preparation rewrites parameters and source paths. Each concurrent row
-                    # gets its own script in the original directory for relative imports.
+                    # VPy preparation rewrites source paths and output format. Keep each row's
+                    # script in the original directory for relative imports.
                     with source_locks.get(source_key(source_path), nullcontext()):
                         if cancel_event is not None and cancel_event.is_set():
                             raise TaskCancelled()
-                        if parallel:
-                            descriptor, script = tempfile.mkstemp(
-                                prefix='.encode-', suffix='.vpy', dir=os.path.dirname(os.path.abspath(row.vpy_path)),
+                        descriptor, script = tempfile.mkstemp(
+                            prefix='.encode-', suffix='.vpy', dir=os.path.dirname(os.path.abspath(row.vpy_path)),
+                        )
+                        os.close(descriptor)
+                        try:
+                            shutil.copyfile(row.vpy_path, script)
+                            execute_video_row(
+                                row_service, replace(row, vpy_path=script), source_path, progress_name, video_name,
                             )
-                            os.close(descriptor)
-                            try:
-                                shutil.copyfile(row.vpy_path, script)
-                                execute_video_row(
-                                    row_service, replace(row, vpy_path=script), source_path, progress_name, video_name,
-                                )
-                            finally:
-                                force_remove_file(script)
-                        else:
-                            execute_video_row(row_service, row, source_path, progress_name, video_name)
+                        finally:
+                            force_remove_file(script)
                 elif source_path.lower().endswith('.mka') and os.path.isfile(source_path):
                     mux_with_audio_conversion(
                         source_path,

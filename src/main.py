@@ -47,7 +47,7 @@ def _launch_detached(arguments: list[str]) -> int:
         entrypoint_end = len(sys.orig_argv) - len(arguments)
         command.extend(sys.orig_argv[1:entrypoint_end])
     command.append("--detached-gui")
-    command.extend(argument for argument in arguments if argument != "--detach")
+    command.extend(argument for argument in arguments if argument not in ("--detach", "--detached-gui"))
     process_options = (
         {"creationflags": subprocess.CREATE_NO_WINDOW}
         if sys.platform == "win32" else {"start_new_session": True}
@@ -73,7 +73,7 @@ def _launch_detached(arguments: list[str]) -> int:
     return 0
 
 
-def main() -> None:
+def main(*, detached_gui: bool = False) -> None:
     if sys.platform == "darwin" and sys.version_info < (3, 10):
         runtime = Path.home() / "Library/Application Support/BluraySubtitle/Runtime"
         python = runtime / "python/bin/python3"
@@ -95,7 +95,7 @@ def main() -> None:
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     multiprocessing.freeze_support()
-    if not foreground and "--detached-gui" not in arguments:
+    if not (foreground or detached_gui or "--detached-gui" in arguments):
         raise SystemExit(_launch_detached(arguments))
     sys.argv[1:] = [
         argument for argument in arguments if argument not in ("--detach", "--detached-gui", "--foreground")
@@ -105,9 +105,13 @@ def main() -> None:
     os.environ.setdefault("QT_FORCE_STDERR_LOGGING", "1")
     with application_log.capture(foreground=foreground):
         # Capture startup output before importing Qt or constructing the window.
-        from src.runtime.bootstrap import run_src_entry
+        from src.runtime.bootstrap import RESTART_FOR_UI_SCALE, run_src_entry
 
-        run_src_entry(application_log)
+        exit_code = run_src_entry(application_log)
+        if exit_code == RESTART_FOR_UI_SCALE:
+            # The Qt event loop has shut down and released the single-instance lock.
+            exit_code = _launch_detached(arguments)
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

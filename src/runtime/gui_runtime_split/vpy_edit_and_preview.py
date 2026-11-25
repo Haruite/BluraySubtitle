@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QProcess, QProcessEnvironment
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton
+from PyQt6.QtWidgets import QWidget, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QTableWidget
 
 from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, ENCODE_REMUX_SP_LABELS
 from src.core.tool_paths import bundle_directory, is_bundled_tool, require_tool_path, tool_path
@@ -18,6 +18,7 @@ from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
 )
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox
+from src.runtime.vpy_output import remove_vpy_output_format, vpy_with_output_format
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -881,7 +882,9 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to open vsedit: {error}').format(error=e))
             return None
 
-    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str) -> bool:
+    def _update_vpy_paths_in_file(
+            self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str,
+    ) -> bool:
         """Update a=/sub_file=/TextSub toggle in target vpy file for preview context."""
         vpy_path = os.path.normpath(str(vpy_path or '').strip())
         if not vpy_path or not os.path.exists(vpy_path):
@@ -889,11 +892,12 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
         with open(vpy_path, 'r', encoding='utf-8') as fp:
             lines = fp.readlines()
+        original = ''.join(lines)
 
         def norm(s: str) -> str:
             return s.rstrip('\r\n')
 
-        bits = self._selected_output_bits_for_vpy()
+        bits = int(bit_depth)
         processing_values = self._current_vpy_processing_values()
         changed = False
         for idx, line in enumerate(lines):
@@ -946,18 +950,22 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     changed = True
                 continue
 
-        if changed:
+        output = vpy_with_output_format(''.join(lines), bit_depth, chroma_format)
+        if changed or output != original:
             with open(vpy_path, 'w', encoding='utf-8') as fp:
-                fp.writelines(lines)
-        return changed
+                fp.write(output)
+            return True
+        return False
 
-    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
+    def _create_temp_preview_vpy_from_default(
+            self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str,
+    ) -> str:
         self.ensure_default_vpy_file()
         default_vpy = self.get_default_vpy_path()
         if not os.path.exists(default_vpy):
             return ''
         try:
-            bits = self._selected_output_bits_for_vpy()
+            bits = int(bit_depth)
             processing_values = self._current_vpy_processing_values()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 lines = fp.readlines()
@@ -997,7 +1005,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
             os.close(fd)
             with open(temp_vpy, 'w', encoding='utf-8') as fp:
-                fp.writelines(out)
+                fp.write(vpy_with_output_format(''.join(out), bit_depth, chroma_format))
             return temp_vpy
         except Exception:
             print_exc_terminal()
@@ -1012,7 +1020,8 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 default_lines = fp.readlines()
             with open(temp_vpy, 'r', encoding='utf-8') as fp:
-                temp_lines = fp.readlines()
+                script = remove_vpy_output_format(fp.read()).rstrip('\n') + '\n'
+                temp_lines = script.splitlines(keepends=True)
 
             def _find_runtime_line(lines: list[str], key: str) -> Optional[str]:
                 pat = re.compile(rf'^(\s*)(#\s*)?({re.escape(key)}\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$')
@@ -1078,10 +1087,27 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         except Exception:
             print_exc_terminal()
 
-    def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
+    def _preview_script_for_row(
+            self, vpy_path: str, video_path: str, subtitle_path: str, *, table: QTableWidget, row: int,
+    ):
         if not video_path:
             AnimatedMessageBox.information(self, self.t('Prompt'), self.t('Cannot determine video file path'))
             return
+
+        controls = self.encode_device_controls
+        bit_depth = str(self._selected_output_bits_for_vpy())
+        chroma_format = controls.cpu_box.chroma.currentData() or 'yuv420'
+        columns = table.property('columnKeys') or ()
+        if controls.gpu_enabled and 'video_encode_device' in columns:
+            combo = table.cellWidget(row, columns.index('video_encode_device'))
+            choice = controls.gpu_choices().get(combo.currentData()) if isinstance(combo, QComboBox) else None
+            if choice is not None:
+                bit_depth, chroma_format = choice.bit_depth, choice.output_chroma_format
+                if not chroma_format:
+                    AnimatedMessageBox.information(self, self.t('Prompt'), self.t(
+                        'Select a verified chroma format for {device} in row {row}.'
+                    ).format(device=controls.device_label(choice.device), row=row + 1))
+                    return
 
         vpy_path = (vpy_path or '').strip()
         default_vpy = self.get_default_vpy_path()
@@ -1096,8 +1122,9 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 is_default = False
             if is_default:
                 self.ensure_default_vpy_file()
-                temp_vpy = self._create_temp_preview_vpy_from_default(video_path=video_path,
-                                                                      subtitle_path=subtitle_path or '')
+                temp_vpy = self._create_temp_preview_vpy_from_default(
+                    video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                )
                 if not temp_vpy:
                     AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
                     return
@@ -1132,8 +1159,9 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 proc.finished.connect(sync_and_cleanup)
                 proc.errorOccurred.connect(sync_and_cleanup)
             else:
-                self._update_vpy_paths_in_file(vpy_path=vpy_path, video_path=video_path,
-                                               subtitle_path=subtitle_path or '')
+                self._update_vpy_paths_in_file(
+                    vpy_path, video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                )
                 self.open_vpy_in_vsedit(vpy_path)
         except Exception as e:
             AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=e))
@@ -1185,7 +1213,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             except Exception:
                 subtitle_path = ''
             vpy_path = self.get_vpy_path_from_row(row_index)
-            self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
+            self._preview_script_for_row(vpy_path, video_path, subtitle_path, table=self.table2, row=row_index)
             return
 
         try:
@@ -1214,7 +1242,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
 
         vpy_path = self.get_vpy_path_from_row(row_index)
-        self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
+        self._preview_script_for_row(vpy_path, video_path, subtitle_path, table=self.table2, row=row_index)
 
     def get_sp_vpy_path_from_row(self, row_index: int) -> str:
         if self.get_selected_function_id() != 4:
@@ -1263,7 +1291,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
             video_path = self._get_remux_source_path_from_table3_row(row_index)
             vpy_path = self.get_sp_vpy_path_from_row(row_index)
-            self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path='')
+            self._preview_script_for_row(vpy_path, video_path, '', table=self.table3, row=row_index)
             return
 
         try:
@@ -1284,4 +1312,4 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         subtitle_path = ''
 
         vpy_path = self.get_sp_vpy_path_from_row(row_index)
-        self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
+        self._preview_script_for_row(vpy_path, video_path, subtitle_path, table=self.table3, row=row_index)

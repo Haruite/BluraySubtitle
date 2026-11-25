@@ -8,21 +8,21 @@
 
 | 编码器 | 输出位深 | 实际取舍 |
 | --- | --- | --- |
-| x264 / AVC | 默认 8-bit；10-bit 使用 `--profile high10` | 成熟、通常更快，对旧播放器兼容较广；同等效果通常比合理配置的新编码需要更多数据 |
+| x264 / AVC | 8 位或 10 位 | 成熟、通常更快，对旧播放器兼容较广；同等效果通常比合理配置的新编码需要更多数据 |
 | x265 / HEVC | 8/10/12-bit，默认 10-bit | 项目默认；以更多编码计算换取压缩效率，保留 Dolby Vision 须使用 10-bit |
 | SVT-AV1 | 取决于所选构建，标准构建支持 8/10-bit | 较新的压缩和胶片颗粒工具，需确认解码支持；当前流程会提示并省略 Dolby Vision |
 
 10-bit SDR 输出可减轻量化／色带问题，但不会把 SDR 变成 HDR。编码背景见[媒体格式](Media-Formats-and-Dolby-Vision.zh-Hans.md#视频格式)。
 
-安装脚本构建未修改的上游 SVT-AV1。压制控件与设置窗口仅在所配置的可执行文件的 `--help` 将 `12` 列为 `--input-depth` 可选值时提供 12-bit；保存新的 SVT-AV1 路径后会刷新可选位深。aomenc、rav1e 等其他 AV1 编码器使用不同命令行，不能在此流程中替代 `SvtAv1EncApp`。
+安装脚本构建未修改的上游 SVT-AV1。所配置的可执行文件在 `--help` 中将 `12` 列为 `--input-depth` 可选值时，压制控件和设置窗口会为 SVT-AV1 提供 12 位选项。保存新的 SVT-AV1 路径后会刷新可选位深。
 
 画质取决于源纹理／运动、编码器版本、码率控制、preset、滤镜和播放条件。应从同一来源截取代表性样本，在目标观看距离比较；把某次测试结果再转成另一编码会增加世代损失，使比较失真。
 
 ## 视频压制设备
 
-**启用 GPU 设备压制**默认关闭。在**设置 → 高级 → 视频压制设备设置**开启后，压制区显示 GPU 设置，正片和 SP 表格显示**视频压制设备**列。压制区和高级设置都按设备显示编码工具或格式、位深和预设。
+**启用 GPU 设备压制**默认关闭。在**设置 → 高级 → 视频压制设备设置**开启后，压制区显示 GPU 设置，正片和 SP 表格显示**视频压制设备**列。每个设备有独立的编码工具或格式、位深、预设和色度采样。
 
-检测先查询驱动支持的编码格式和位深，再用 FFmpeg 试压相应组合和预设，由 FFprobe 校验输出帧。**检测 GPU**使用同一套流程，**复制报告**可获取驱动报告的能力、实际命令和验证通过的组合。源码运行时，环境配置脚本会将能力查询工具安装在 FFmpeg 所在目录。
+**检测 GPU**查询可用的编码格式、位深和驱动能力。**复制报告**可获取驱动结果和查询命令。选中 GPU 并设置压制参数后，FFmpeg 会针对当前组合试压。**色度采样**下拉框显示 FFprobe 在试压成品中确认的格式。源码运行时，环境配置脚本会将能力查询工具安装在 FFmpeg 所在目录。
 
 | 安装目标 | 硬件编码后端 |
 | --- | --- |
@@ -32,13 +32,32 @@
 | Linux ARM64 | 安装的驱动支持时使用 NVIDIA NVENC 和 Vulkan |
 | Intel 与 Apple 芯片的 macOS | 由系统选择的 VideoToolbox 硬件编码器，以及通过 MoltenVK 使用 Vulkan |
 
-GPU 出现在界面上需要所配置的 FFmpeg 包含对应硬件后端，且主机驱动可用。Linux 的 AMF 接口由驱动选择 Vulkan 适配器，因此只有一个 AMD 渲染设备时才提供该选项。VideoToolbox 显示一个由系统选择的设备。在 Windows x64，若各厂商后端均未通过，带 Media Foundation 的自定义 FFmpeg 可提供由系统选择的 8 位硬件编码器。 [FFmpeg 硬件设备文档](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options) · [NVIDIA 原生 ARM64 NVENC 要求](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#basic-encoding-flow)
+GPU 出现在界面上需要所配置的 FFmpeg 包含对应硬件后端，且主机驱动可用。Linux 的 AMF 接口由驱动选择 Vulkan 适配器，因此只有一个 AMD 渲染设备时才提供该选项。VideoToolbox 显示一个由系统选择的设备。在 Windows x64，若各厂商后端均未报告可用组合，带 Media Foundation 的自定义 FFmpeg 可提供由系统选择的 8 位硬件编码器。 [FFmpeg 硬件设备文档](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options) · [NVIDIA 原生 ARM64 NVENC 要求](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#basic-encoding-flow)
 
-Vulkan 使用 GPU 计算着色器压制 FFV1，需要支持 Vulkan 1.3 的 GPU 驱动和编入 `ffv1_vulkan` 的 FFmpeg。BluraySubtitle 提供验证通过的 8 位、10 位和 12 位 4:2:0 组合，将无损 FFV1 v4 视频混流到最终 MKV。有厂商编码器的显卡也可在同一个设备框内选择 FFV1。 [FFV1 格式和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#ffv1) · [FFmpeg Vulkan 计算编码器](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
+Vulkan 使用 GPU 计算着色器压制 FFV1，需要支持 Vulkan 1.3 的 GPU 驱动和编入 `ffv1_vulkan` 的 FFmpeg。8 位、10 位和 12 位均可在试压通过后选择 `yuv420`、`yuv422` 或 `yuv444`。程序将无损 FFV1 v4 视频混流到最终 MKV。 [FFV1 格式和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#ffv1) · [FFmpeg Vulkan 计算编码器](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
 
-在 macOS 上，VideoToolbox 可提供 10 位 ProRes 422 和 12 位 ProRes 4444 的各档规格。BluraySubtitle 列出通过短片硬件试压的规格，并将视频混流到最终 MKV。 [ProRes 规格和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#apple-prores) · [Apple VideoToolbox 编码能力查询](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
+在 macOS 上，VideoToolbox 的 ProRes 预设决定采样格式。驱动可提供 10 位 ProRes 422 和 12 位 ProRes 4444 的各档规格。 [ProRes 规格和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#apple-prores) · [Apple VideoToolbox 编码能力查询](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
 
-各设备分别按表格顺序处理分配给自己的条目，并可同时压制。附加到正片的 SP 轨道跟随正片输出。同一套 VapourSynth 流程向 CPU 和 GPU 编码器提供处理好的画面。
+各设备分别按表格顺序处理分配给自己的条目，并可同时压制。附加到正片的 SP 轨道跟随正片输出。每行的 VPy 在滤镜和硬字幕处理后，将输出 0 转成该行的位深和色度采样。VSEdit 预览沿用该格式。
+
+## CPU 压制命令
+
+使用原盘或 Remux 来源时，CPU 区域会根据压制工具、输出位深和色度采样生成**压制命令**。手动编辑命令前请先选好这些选项。x264 和 x265 提供 `yuv420`、`yuv422` 和 `yuv444`，随附的 SVT-AV1 使用 `yuv420`。x264 的 4:2:2 默认命令应用 `--profile high422 --output-csp i422`，4:4:4 默认命令应用 `--profile high444 --output-csp i444`。
+
+开始压制时，独立的 `{params}` 占位符会展开为**压制参数**框中的参数。切换预设或修改参数会更新命令使用的参数。也可以将参数直接写在**压制命令**中，使用完全手写的命令。
+
+开始压制时，程序读取界面上的命令，并将 `{X264_PATH}`、`{X265_PATH}` 或 `{SVT_AV1_PATH}` 解析为设置中的编码器路径。也可使用 `PATH` 中的程序名，或用引号括住完整路径。
+
+编码器从标准输入读取所选位深和采样格式的 Y4M。保留一个占位符来声明临时视频格式。`{output.h264}` 对应 H.264 裸流，`{output.hevc}` 对应 HEVC 裸流，`{output.ivf}` 对应 IVF 封装的 AV1。命令应处理每个输入帧，并输出一条符合所选位深和采样格式的视频。BluraySubtitle 为各条目填入临时路径，并用来源时间戳及所选轨道混流。
+
+使用 x264、x265 或 SVT-AV1 时，可在需要填入自动元数据参数的位置保留 `{metadata}`。使用其他编码器时，按需在命令中填写该编码器的元数据参数。
+
+以下 AV1 命令使用 **10 位**和 **yuv420**，可根据素材调整参数。[aomenc 参数](https://aomedia.googlesource.com/aom/+/master/apps/aomenc.c) · [rav1e 文档](https://github.com/xiph/rav1e#compressing-video)
+
+```text
+aomenc --codec=av1 --ivf --passes=1 --cpu-used=6 --end-usage=q --cq-level=25 --bit-depth=10 --input-bit-depth=10 --lag-in-frames=0 -o {output.ivf} -
+rav1e --speed 10 --quantizer 80 -o {output.ivf} -
+```
 
 ## BluraySubtitle 压制管线
 
@@ -215,15 +234,15 @@ x265 10-bit 对 Dolby Vision 输入准备基础层和 profile 8.1 RPU 供编码�
 
 启动编码器前，BluraySubtitle 会抽查输出 0 的首帧、中间帧和末帧。稳定的 `_ColorRange`、`_Primaries`、`_Transfer`、`_Matrix` 和 `_ChromaLocation` 属性优先于来源元数据，缺失属性则回退到来源；抽查值不一致时当前行会停止。
 
-实际来源带有 HDR10+ 时，x265 10/12 位压制会提取经过校验的 JSON，并对照 VPy 输出检查元数据帧数。x265 声明支持 `--dhdr10-info` 时在压制中写入；缺少该参数或原生验证失败时，改由 `hdr10plus_tool` 执行经过验证的后注入。失败时会省略动态元数据继续压制，并保留非空 JSON 供诊断；使用该流程的自定义脚本必须保持帧顺序。
+实际来源带有 HDR10+ 时，x265 10/12 位 4:2:0 压制会提取经过校验的 JSON，并对照 VPy 输出检查元数据帧数。x265 声明支持 `--dhdr10-info` 时在压制中写入；缺少该参数或原生验证失败时，改由 `hdr10plus_tool` 执行经过验证的后注入。失败时会省略动态元数据继续压制，并保留非空 JSON 供诊断；使用该流程的自定义脚本必须保持帧顺序。
 
 实际 x265 支持 RPU 输入，且当前行已有 VBV 和母版显示参数时，Dolby Vision 使用原生写入；否则或原生产物验证失败时，使用 `dovi_tool` 注入，不改变码率控制。
 
 同时包含 HDR10+ 与 Dolby Vision 时，若两条原生路径均满足条件，x265 会在同一次压制中写入两者。最后一次注入后、最终混流前，程序会检查 HEVC 中的两种元数据。
 
-硬件压制使用 10 位 HEVC 保留 HDR10+ 和 Dolby Vision，并将兼容的 HDR10 母版显示和亮度元数据写入 Matroska 视频轨。编码后，`dovi_tool` 和 `hdr10plus_tool` 分别向临时 HEVC 注入相应元数据。新码流通过校验并确认已有的 Dolby Vision 元数据仍在后，才会替换上一份码流。
+硬件压制使用 10 位 4:2:0 HEVC 保留 HDR10+ 和 Dolby Vision，并将兼容的 HDR10 母版显示和亮度元数据写入 Matroska 视频轨。编码后，`dovi_tool` 和 `hdr10plus_tool` 分别向临时 HEVC 注入相应元数据。新码流通过校验并确认已有的 Dolby Vision 元数据仍在后，才会替换上一份码流。
 
-所选输出无法保留全部来源 HDR 元数据时，程序仍按所选设置继续压制。例如，8 位输出会省略自动写入的母版显示和亮度元数据。完成报告会列出省略项。元数据工具处理失败时也会留下诊断报告并保留有效的编码视频。
+所选输出无法保留全部来源 HDR 元数据时，程序仍按所选设置继续压制。例如，8 位输出会省略自动写入的母版显示和亮度元数据。4:2:2 或 4:4:4 输出时会省略自动写入的 Dolby Vision 和 HDR10+ 元数据。完成报告会列出省略项。元数据工具处理失败时也会留下诊断报告并保留有效的编码视频。
 
 自动裁剪改变编码尺寸时，程序会按实际裁剪值调整每个 Dolby Vision L5 有效画面 preset，再把所得 Profile 8.1 RPU 交给 x265 原生写入或后注入。因此，手工提供 RPU 不能与自动裁剪同时使用。HDR10+ 在此流程中没有对应的裁剪偏移编辑：程序保留来源亮度统计，不在裁剪后重新测量。
 

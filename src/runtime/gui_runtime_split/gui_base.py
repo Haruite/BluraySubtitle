@@ -365,13 +365,16 @@ class BluraySubtitleGuiBase(QWidget):
     def _configuration_for_service_run(self) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
 
+    def _confirm_ui_scale_restart(self, dialog: SettingsDialog) -> bool:
+        raise NotImplementedError
+
     def _conversion_options_for_stream(self, stream: dict[str, object]) -> list[str]:
         raise NotImplementedError
 
     def _create_table_section(self, table: QTableWidget, title: str, description: str, initial_height: int) -> tuple[QGroupBox, QLabel]:
         raise NotImplementedError
 
-    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
+    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str) -> str:
         raise NotImplementedError
 
     def _current_encode_lossless_audio_codec(self) -> str:
@@ -661,7 +664,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _present_window(window: QWidget) -> None:
         raise NotImplementedError
 
-    def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
+    def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str, *, table: QTableWidget, row: int):
         raise NotImplementedError
 
     def _read_m2ts_track_info(self, m2ts_path: str) -> list[dict[str, object]]:
@@ -692,6 +695,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _refresh_all_table_headers(self):
+        raise NotImplementedError
+
+    def _refresh_cpu_encode_command(self) -> None:
         raise NotImplementedError
 
     def _refresh_encode_device_columns(self) -> None:
@@ -976,7 +982,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _update_trim_copyright_tail_checkbox_for_episode_movie_mode(self) -> None:
         raise NotImplementedError
 
-    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str) -> bool:
+    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str) -> bool:
         raise NotImplementedError
 
     def _window_geometry_text(self, window: QWidget | None=None) -> str:

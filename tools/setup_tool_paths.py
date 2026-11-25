@@ -9,10 +9,55 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.app_config import app_config_path, load_app_config, save_app_config
+from src.core.app_config import AppConfig, app_config_path, load_app_config, save_app_config
 from src.core.i18n import translate_text
 from src.core.tool_paths import initial_tool_paths, resolve_tool_paths
 from tools.windows_tool_paths import normalize_mkvtoolnix_path, normalize_vsedit_path
+
+
+def _optional_tool_paths() -> set[str]:
+    optional = {"MPV_PATH", "MPV_CONFIG_PATH"}
+    if sys.platform == "win32":
+        optional.add("PLUGIN_PATH")
+    elif sys.platform != "darwin":
+        optional.add("LIBASS_PATH")
+    return optional
+
+
+def prepare_tool_paths(path: Path, settings: Path | None = None, *, defaults: dict[str, str] | None = None) -> bool:
+    """Seed and display paths that need confirmation before desktop setup."""
+    initialized = []
+    config = load_app_config(
+        path, settings_path=settings, initial_tools=defaults, on_tools_initialized=initialized.append,
+    )
+    if not initialized:
+        optional = _optional_tool_paths()
+        automatic = [name for name, value in config.tools.items() if not value and name not in optional]
+        if not automatic:
+            return False
+        suggested = initial_tool_paths(path.parent, settings) if defaults is None else defaults
+        tools = config.tools | {name: suggested[name] for name in automatic if suggested.get(name)}
+        if tools == config.tools:
+            return False
+        config = replace(config, tools=tools)
+        save_app_config(config, path)
+    print(path)
+    for name, value in config.tools.items():
+        print(f"{name} = {value}")
+    return True
+
+
+def read_tool_paths(path: Path, language: str, *, windows: bool = False) -> tuple[AppConfig, dict[str, str]]:
+    config = load_app_config(path, require_tools=True)
+    resolved = resolve_tool_paths(config.tools, path.parent, discover=False)
+    paths = {name: resolved[name] for name in config.tools}
+    optional = _optional_tool_paths()
+    for name, value in paths.items():
+        if (name not in optional and not value) or (windows and '"' in value):
+            raise ValueError(translate_text("Invalid setup tool path for {tool} in {path}", language).format(
+                tool=name, path=path,
+            ))
+    return config, paths
 
 
 def main() -> None:
@@ -23,36 +68,12 @@ def main() -> None:
     args = parser.parse_args()
     path = app_config_path()
 
-    def show_initialized_tools(config) -> None:
-        print(path)
-        for name, value in config.tools.items():
-            print(f"{name} = {value}")
-
-    optional = {"MPV_PATH", "MPV_CONFIG_PATH", "PLUGIN_PATH" if sys.platform == "win32" else "LIBASS_PATH"}
     try:
         if args.operation == "prepare":
-            initialized = []
-            config = load_app_config(path, settings_path=args.settings, on_tools_initialized=initialized.append)
-            automatic = [name for name, value in config.tools.items() if not value and name not in optional]
-            if automatic and not initialized:
-                defaults = initial_tool_paths(path.parent, args.settings)
-                tools = config.tools | {name: defaults[name] for name in automatic}
-                if tools != config.tools:
-                    config = replace(config, tools=tools)
-                    save_app_config(config, path)
-                    show_initialized_tools(config)
-            elif initialized:
-                show_initialized_tools(config)
+            prepare_tool_paths(path, args.settings)
             return
 
-        config = load_app_config(path, require_tools=True)
-        resolved = resolve_tool_paths(config.tools, path.parent, discover=False)
-        paths = {name: resolved[name] for name in config.tools}
-        for name, value in paths.items():
-            if (name not in optional and not value) or (args.operation == "windows" and '"' in value):
-                raise ValueError(translate_text("Invalid setup tool path for {tool} in {path}", args.language).format(
-                    tool=name, path=path,
-                ))
+        config, paths = read_tool_paths(path, args.language, windows=args.operation == "windows")
         if args.operation == "linux":
             for name, value in paths.items():
                 print(f"{name}\t{value}")

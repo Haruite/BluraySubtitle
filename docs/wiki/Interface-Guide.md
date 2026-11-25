@@ -12,6 +12,10 @@ The *Witch Craft Works* example selects the first two discs for 12 TV episodes a
 
 [![Witch Craft Works joined-disc interface](https://sbx.mysmy.top/pictures/interface-20260910-joined-disc-en.jpg)](https://sbx.mysmy.top/pictures/interface-20260910-joined-disc-en.jpg)
 
+## Interface scale
+
+**Settings → General → UI scale** follows the system by default. Percentages from **75%** to **200%** multiply the system scale for text, controls, tables, and dialogs. Save or apply the change, then choose **Restart now** or **Later**. If a task is running, the new scale takes effect on the next launch. Title bars drawn by the desktop use its scaling settings.
+
 ## Window backgrounds
 
 Choose images for the main and log windows under **Settings → Paths**. Adjust image opacity and blur under **Settings → General**. Each image is cropped from the center to fill its window. Clear the image path to restore the default background.

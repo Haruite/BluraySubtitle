@@ -18,7 +18,9 @@ from uuid import UUID
 
 from src.core.i18n import translate_text
 from src.core.settings import FFMPEG_PATH
+from src.core.video_format import CHROMA_FORMATS, planar_yuv_format, yuv_format_matches
 from src.exports.utils import run_command
+from src.runtime import TaskCancelled
 
 
 GPU_CODECS = {'hevc': 'H.265', 'h264': 'H.264', 'av1': 'AV1', 'prores': 'ProRes', 'ffv1': 'FFV1'}
@@ -27,12 +29,7 @@ GPU_BACKENDS = {
     'nvenc': 'NVENC', 'qsv': 'Quick Sync', 'amf': 'AMF',
     'videotoolbox': 'VideoToolbox', 'mf': 'Media Foundation', 'vulkan': 'Vulkan',
 }
-_FFV1_INPUT_FORMATS = {'8': 'yuv420p', '10': 'yuv420p10le', '12': 'yuv420p12le'}
-GPU_OUTPUT_DEPTHS = {
-    **{pixel_format: depth for depth, pixel_format in _FFV1_INPUT_FORMATS.items()},
-    'yuvj420p': '8', 'yuv422p10le': '10',
-    'yuv444p12le': '12', 'yuva444p12le': '12',
-}
+_FFV1_DEPTHS = ('8', '10', '12')
 _VENDOR_BACKENDS = {0x10DE: 'nvenc', 0x8086: 'qsv', 0x1002: 'amf'}
 _PRORES_PROFILES = {
     'standard': ('10', 'ProRes 422'), 'hq': ('10', 'ProRes 422 HQ'),
@@ -53,6 +50,7 @@ class GpuEncodeDevice:
     static_hdr_input_options: frozenset[str] = frozenset()
     hardware_id: str = ''
     vulkan_adapter: str | None = None
+    cuda_adapter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +59,13 @@ class VideoEncodeChoice:
     bit_depth: str
     parameters: str
     device: GpuEncodeDevice | None = None
+    chroma_format: str = 'yuv420'
+
+    @property
+    def output_chroma_format(self) -> str:
+        if self.encoder == 'prores':
+            return 'yuv444' if self.bit_depth == '12' else 'yuv422'
+        return self.chroma_format
 
 
 def gpu_detection_supported() -> bool:
@@ -173,6 +178,28 @@ def cpu_device_name() -> str:
     return f'{count} · {" + ".join(models)}' if models else count
 
 
+def _windows_cuda_adapters() -> dict[str, str]:
+    """Match CUDA ordinals to DXGI adapter LUIDs, including mixed-vendor systems."""
+    try:
+        cuda = ctypes.WinDLL('nvcuda.dll')
+        if cuda.cuInit(0):
+            return {}
+        get_luid = cuda.cuDeviceGetLuid
+        count = ctypes.c_int()
+        if cuda.cuDeviceGetCount(ctypes.byref(count)):
+            return {}
+        adapters = {}
+        for index in range(count.value):
+            device = ctypes.c_int()
+            luid = ctypes.create_string_buffer(8)
+            mask = ctypes.c_uint()
+            if not cuda.cuDeviceGet(ctypes.byref(device), index) and not get_luid(luid, ctypes.byref(mask), device):
+                adapters['luid:' + luid.raw.hex()] = str(index)
+        return adapters
+    except (AttributeError, OSError):
+        return {}
+
+
 def _windows_adapters(report: Callable[[str], None]) -> list[GpuEncodeDevice]:
     class Luid(ctypes.Structure):
         _fields_ = [('low', ctypes.c_uint32), ('high', ctypes.c_int32)]
@@ -202,6 +229,7 @@ def _windows_adapters(report: Callable[[str], None]) -> list[GpuEncodeDevice]:
         report(f'CreateDXGIFactory1: HRESULT 0x{result & 0xffffffff:08x}')
         return []
     found = []
+    cuda_adapters = None
     try:
         enumerate_adapter = method(factory, 7, ctypes.c_long, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))
         # Use EnumAdapters order, the same indices FFmpeg uses for D3D11 devices.
@@ -222,6 +250,9 @@ def _windows_adapters(report: Callable[[str], None]) -> list[GpuEncodeDevice]:
                 backend = _VENDOR_BACKENDS.get(description.vendor)
                 if not backend:
                     continue
+                if backend == 'nvenc' and cuda_adapters is None:
+                    cuda_adapters = _windows_cuda_adapters()
+                hardware_id = 'luid:' + bytes(description.luid).hex()
                 identity = AdapterName(4, ctypes.sizeof(AdapterName), description.luid, 0)
                 result = ctypes.windll.user32.DisplayConfigGetDeviceInfo(ctypes.byref(identity))
                 key = identity.path.casefold() if result == 0 and identity.path else (
@@ -229,7 +260,7 @@ def _windows_adapters(report: Callable[[str], None]) -> list[GpuEncodeDevice]:
                 )
                 found.append(GpuEncodeDevice(
                     f'windows:{key}', description.name, backend, 'd3d11va', str(index),
-                    hardware_id='luid:' + bytes(description.luid).hex(),
+                    hardware_id=hardware_id, cuda_adapter=(cuda_adapters or {}).get(hardware_id),
                 ))
             finally:
                 method(adapter, 2, ctypes.c_ulong)(adapter)
@@ -320,7 +351,7 @@ def _parse_vulkan_adapters(output: bytes, *, nvidia_only: bool) -> list[tuple[Gp
         if (nvidia_only and vendor != '10de') or hardware_id in seen:
             continue
         identity = UUID(hex=raw_uuid)
-        valid_depths = tuple(depth for depth in depths.split(',') if depth in _FFV1_INPUT_FORMATS)
+        valid_depths = tuple(depth for depth in depths.split(',') if depth in _FFV1_DEPTHS)
         if identity.int and valid_depths:
             seen.add(hardware_id)
             found.append((GpuEncodeDevice(
@@ -384,10 +415,10 @@ def _preset_parameters(device: GpuEncodeDevice, codec: str, depth: str) -> dict[
     return {'Fast': '-b:v 5M', 'Balanced': '-b:v 10M', 'High Quality': '-b:v 20M'}
 
 
-def gpu_presets(device: GpuEncodeDevice, codec: str, depth: str, *, verified_only: bool = True) -> dict[str, str]:
+def gpu_presets(device: GpuEncodeDevice, codec: str, depth: str, *, available_only: bool = True) -> dict[str, str]:
     return {
         name: parameters for name, parameters in _preset_parameters(device, codec, depth).items()
-        if not verified_only or (codec, depth, name) in device.supported_presets
+        if not available_only or (codec, depth, name) in device.supported_presets
     }
 
 
@@ -419,6 +450,23 @@ def hardware_encoder_parameters(text: str) -> list[str]:
     return arguments
 
 
+def gpu_chroma_candidates(choice: VideoEncodeChoice) -> tuple[str, ...]:
+    device = choice.device
+    assert device is not None
+    if choice.encoder == 'prores':
+        return (choice.output_chroma_format,)
+    if (
+            choice.encoder == 'ffv1'
+            or (device.backend == 'qsv' and choice.encoder == 'hevc')
+            or (
+                device.backend == 'nvenc' and choice.encoder in ('h264', 'hevc')
+                and (device.interface == 'cuda' or device.cuda_adapter is not None)
+            )
+    ):
+        return CHROMA_FORMATS
+    return ('yuv420',)
+
+
 def hardware_encode_command(
         ffmpeg: str, choice: VideoEncodeChoice, source_args: list[str], output_args: list[str], *,
         metadata_args: tuple[str, ...] = (),
@@ -427,11 +475,26 @@ def hardware_encode_command(
     assert device is not None
     initial = [ffmpeg, '-hide_banner', '-nostdin', '-n']
     backend = 'vulkan' if choice.encoder == 'ffv1' else device.backend
-    pixel_format = 'p010le' if choice.bit_depth == '10' else 'nv12'
+    chroma_format = choice.output_chroma_format
+    if chroma_format not in gpu_chroma_candidates(choice):
+        raise ValueError(translate_text('Unsupported chroma sampling: {chroma}').format(chroma=chroma_format))
+    ten_bit = choice.bit_depth == '10'
+    pixel_format = 'p010le' if ten_bit else 'nv12'
     if choice.encoder == 'ffv1':
-        pixel_format = _FFV1_INPUT_FORMATS[choice.bit_depth]
+        pixel_format = planar_yuv_format(chroma_format, choice.bit_depth)
     elif choice.encoder == 'prores':
         pixel_format = 'ayuv64le' if choice.bit_depth == '12' else 'p210le'
+    elif chroma_format != 'yuv420':
+        if backend == 'qsv':
+            pixel_format = (
+                ('y210le' if ten_bit else 'yuyv422') if chroma_format == 'yuv422'
+                else ('xv30le' if ten_bit else 'vuyx')
+            )
+        elif chroma_format == 'yuv422':
+            pixel_format = 'p210le' if ten_bit else 'nv16'
+        else:
+            # NVENC reads the most significant ten bits of this input format.
+            pixel_format = 'yuv444p16le' if ten_bit else 'yuv444p'
     filters = [f'format={pixel_format}']
     encoder_options = []
     colour_options = {
@@ -450,7 +513,7 @@ def hardware_encode_command(
         elif option in colour_options:
             name, aliases = colour_options[option]
             colour_values.append(f'{name}={aliases.get(value, value)}')
-        elif option == '--chromaloc':
+        elif option == '--chromaloc' and chroma_format == 'yuv420':
             if choice.encoder == 'av1':
                 position = {'0': 'vertical', '2': 'colocated'}.get(value)
                 if position:
@@ -469,6 +532,9 @@ def hardware_encode_command(
         filters.append('hwupload')
         # Version 4 supports subsampled frames with dimensions not aligned to the slice grid.
         encoder_options.extend(('-level', '4', '-strict', 'experimental'))
+    elif backend == 'nvenc' and chroma_format != 'yuv420' and device.cuda_adapter is not None:
+        # D3D11 uploads use packed 4:2:2 and 4:4:4 surfaces that NVENC cannot register.
+        encoder_options.extend(('-gpu', device.cuda_adapter))
     elif device.interface in ('d3d11va', 'vaapi'):
         initial.extend(('-init_hw_device', f'{device.interface}=adapter:{device.adapter}'))
         frame_device = 'adapter'
@@ -487,7 +553,10 @@ def hardware_encode_command(
     elif device.backend == 'mf':
         encoder_options.extend(('-hw_encoding', '1'))
     if choice.encoder == 'hevc' and device.backend != 'mf':
-        encoder_options.extend(('-profile:v', 'main10' if choice.bit_depth == '10' else 'main'))
+        profile = ('main10' if ten_bit else 'main') if chroma_format == 'yuv420' else 'rext'
+        encoder_options.extend(('-profile:v', profile))
+    elif choice.encoder == 'h264' and backend == 'nvenc' and chroma_format != 'yuv420':
+        encoder_options.extend(('-profile:v', 'high422' if chroma_format == 'yuv422' else 'high444p'))
     parameters = hardware_encoder_parameters(choice.parameters)
     if choice.encoder == 'prores' and '-profile:v' not in parameters:
         supported = gpu_presets(device, choice.encoder, choice.bit_depth)
@@ -513,18 +582,17 @@ def _parse_driver_modes(output: bytes) -> dict[tuple[str, str], set[str]]:
     return modes
 
 
-def _verify_hardware_preset(
-        ffmpeg: str, ffprobe: str, choice: VideoEncodeChoice, run, *, verbose: bool,
+def _verify_hardware_output(
+        ffmpeg: str, ffprobe: str, choice: VideoEncodeChoice, run,
 ) -> tuple[bool, dict]:
     muxer = GPU_MUXERS[choice.encoder]
     probe_size = '640x360' if choice.device.backend == 'mf' or choice.encoder == 'ffv1' else '320x192'
     source = f'testsrc2=size={probe_size}:rate=24'
-    if choice.encoder == 'ffv1':
-        source += ',format=' + _FFV1_INPUT_FORMATS[choice.bit_depth]
+    source += ',format=' + planar_yuv_format(choice.output_chroma_format, choice.bit_depth)
     frames = '4'
     encoded = run(hardware_encode_command(
         ffmpeg, choice, ['-f', 'lavfi', '-i', source],
-        ['-frames:v', frames, '-nostats', '-loglevel', 'verbose' if verbose else 'error',
+        ['-frames:v', frames, '-nostats', '-loglevel', 'error',
          '-f', muxer, 'pipe:1'],
     )).stdout
     probe_result = run([
@@ -538,13 +606,43 @@ def _verify_hardware_preset(
     accepted = (
         not probe_result.stderr.strip()
         and stream.get('codec_name') == choice.encoder
-        and GPU_OUTPUT_DEPTHS.get(stream.get('pix_fmt')) == choice.bit_depth
+        and yuv_format_matches(stream.get('pix_fmt'), choice.output_chroma_format, choice.bit_depth)
         and str(stream.get('nb_read_frames')) == frames
     )
-    if accepted and choice.encoder == 'prores':
-        selected_profile = choice.parameters.split()[1]
-        accepted = str(stream.get('profile', '')).casefold() == selected_profile
     return accepted, stream
+
+
+def probe_gpu_chroma_formats(
+        ffmpeg: str, ffprobe: str, choice: VideoEncodeChoice, cancel_event,
+) -> tuple[str, ...]:
+    """Test the selected hardware encoder settings using only candidate chroma formats."""
+    def run(arguments, **kwargs):
+        if cancel_event.is_set():
+            raise TaskCancelled()
+        return run_command(
+            arguments, capture_output=True, timeout=10, cancel_event=cancel_event, check=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), **kwargs,
+        )
+
+    supported = []
+    failures = []
+    for chroma_format in gpu_chroma_candidates(choice):
+        try:
+            accepted, stream = _verify_hardware_output(
+                ffmpeg, ffprobe, replace(choice, chroma_format=chroma_format), run,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            stderr = getattr(error, 'stderr', None)
+            detail = stderr.decode(errors='replace').strip() if stderr else str(error)
+            failures.append(f'{chroma_format} · {detail}')
+        else:
+            if accepted:
+                supported.append(chroma_format)
+            else:
+                failures.append(f'{chroma_format} · {json.dumps(stream, ensure_ascii=False)}')
+    if not supported and failures:
+        raise ValueError('\n'.join(failures))
+    return tuple(supported)
 
 
 def discover_gpu_encoders(
@@ -554,8 +652,7 @@ def discover_gpu_encoders(
         *,
         report: Callable[[str], None] | None = None,
 ) -> tuple[GpuEncodeDevice, ...]:
-    """Query the driver, then verify the available hardware modes with the Encode command."""
-    from src.runtime import TaskCancelled
+    """List the encoder modes advertised by the FFmpeg build and the driver."""
 
     def emit(message: str, **values) -> None:
         if report is not None:
@@ -687,28 +784,17 @@ def discover_gpu_encoders(
             backend = 'vulkan' if codec == 'ffv1' else device.backend
             if f'{codec}_{backend}' not in encoders:
                 continue
-            for name, parameters in _preset_parameters(device, codec, depth).items():
-                if codec == 'prores' and name not in advertised[codec, depth]:
-                    continue
-                emit('Testing {codec}, {depth}-bit, {preset}',
-                     codec=GPU_CODECS[codec], depth=depth, preset=translate_text(name))
-                choice = VideoEncodeChoice(codec, depth, parameters, device)
-                try:
-                    accepted, stream = _verify_hardware_preset(ffmpeg, ffprobe, choice, run, verbose=report is not None)
-                except (OSError, ValueError, subprocess.SubprocessError) as error:
-                    emit('Probe failed: {error}', error=error)
-                    continue
-                if report is not None:
-                    status = translate_text('Passed' if accepted else 'Unexpected encoder output')
-                    report(f'{status}: {json.dumps(stream, ensure_ascii=False)}')
-                if accepted:
-                    if (codec, depth) not in modes:
-                        modes.append((codec, depth))
-                    supported_presets.append((codec, depth, name))
+            presets = [
+                (codec, depth, name) for name in _preset_parameters(device, codec, depth)
+                if codec != 'prores' or name in advertised[codec, depth]
+            ]
+            if presets:
+                modes.append((codec, depth))
+                supported_presets.extend(presets)
         if modes:
             devices.append(replace(device, formats=tuple(modes), supported_presets=tuple(supported_presets),
                                    static_hdr_input_options=static_hdr_options))
-    emit('Usable GPU devices: {count}', count=len(devices))
+    emit('Available GPU devices: {count}', count=len(devices))
     for device in devices:
         report_formats = ', '.join(f'{GPU_CODECS[codec]} {depth}-bit' for codec, depth in device.formats)
         emit('{device}: {formats}', device=gpu_device_label(device), formats=report_formats)

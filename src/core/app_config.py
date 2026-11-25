@@ -21,6 +21,7 @@ from src.core.encode_presets import (
     encode_presets_for_encoder,
 )
 from src.core.tool_paths import MKVTOOLNIX_TOOLS, default_tool_paths, initial_tool_paths, migrate_tool_paths
+from src.core.video_format import CHROMA_FORMATS
 
 
 APP_CONFIG_FILENAME = "config.json"
@@ -28,6 +29,7 @@ DEFAULT_CONFIG_FILENAME = "config.default.json"
 CONFIG_SCHEMA_VERSION = 1
 MAX_BACKGROUND_BLUR = 40
 MAX_LOG_LINE_LIMIT = 100_000
+UI_SCALE_PERCENTAGES = (0, 75, 100, 125, 150, 175, 200)
 FUNCTION_PAGE_IDS = {
     "bluray_remux": 3,
     "bluray_encode": 4,
@@ -69,6 +71,7 @@ class UiPreferences:
     log_background_opacity: int = 20
     log_background_blur: int = 0
     fonts: FontPreferences = FontPreferences()
+    scale_percent: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ class GpuEncodePreferences:
     preset: str = "Balanced"
     parameters: str | None = None
     custom_presets: tuple[UserGpuEncodePreset, ...] = ()
+    chroma_format: str = "yuv420"
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,7 @@ class EncodePreferences:
     vpy_dering_strength: float = 0.0
     vpy_deband_strength: float = 0.5
     vpy_antialiasing_strength: float = 0.5
+    chroma_format: str = "yuv420"
 
 
 @dataclass(frozen=True)
@@ -217,6 +222,13 @@ def _integer_value(
         raise ValueError(
             f"Configuration value must be an integer from {minimum} to {maximum}: {name}"
         )
+    return value
+
+
+def _ui_scale_percent(ui: dict[str, Any]) -> int:
+    value = ui.get("scale_percent", UiPreferences.scale_percent)
+    if type(value) is not int or value not in UI_SCALE_PERCENTAGES:
+        raise ValueError(f"Unsupported UI scale: {value!r}")
     return value
 
 
@@ -380,6 +392,13 @@ def _custom_gpu_encode_presets(entry: dict[str, Any]) -> tuple[UserGpuEncodePres
     return tuple(presets)
 
 
+def _encode_chroma_format(entry: dict[str, Any]) -> str:
+    chroma_format = _string_value(entry, "chroma_format", "yuv420")
+    if chroma_format not in CHROMA_FORMATS:
+        raise ValueError(f"Unsupported chroma sampling: {chroma_format}")
+    return chroma_format
+
+
 def _gpu_encode_preferences(encode: dict[str, Any]) -> tuple[GpuEncodePreferences, ...]:
     entries = encode.get("gpu_devices", ())
     if not isinstance(entries, (list, tuple)):
@@ -399,6 +418,7 @@ def _gpu_encode_preferences(encode: dict[str, Any]) -> tuple[GpuEncodePreference
             _string_value(entry, "preset", "Balanced"),
             _optional_encode_parameters(entry, "parameters"),
             _custom_gpu_encode_presets(entry),
+            _encode_chroma_format(entry),
         )
     return tuple(devices.values())
 
@@ -484,6 +504,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             language=language,
             theme=theme,
             font_size=_integer_value(ui, "font_size", 10, 6, 14),
+            scale_percent=_ui_scale_percent(ui),
             opacity=_integer_value(ui, "opacity", UiPreferences.opacity, 60, 100),
             save_log_to_file=_boolean_value(ui, "save_log_to_file", UiPreferences.save_log_to_file),
             log_line_limit=_integer_value(ui, "log_line_limit", UiPreferences.log_line_limit, 1, MAX_LOG_LINE_LIMIT),
@@ -579,6 +600,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
         encode=EncodePreferences(
             encoder=encoder,
             bit_depth=bit_depth,
+            chroma_format=_encode_chroma_format(encode),
             preset=preset,
             custom_presets=custom_presets,
             cpu_enabled=_boolean_value(encode, "cpu_enabled", True),
@@ -670,6 +692,14 @@ def _read_config_mapping(path: Path) -> dict[str, Any]:
     return raw
 
 
+def read_ui_scale_percent(path: Path | None = None) -> int:
+    """Read the startup scale before Qt initialization and config migration."""
+    target = Path(path) if path is not None else app_config_path()
+    if not target.is_file():
+        target = default_config_path()
+    return _ui_scale_percent(_object_section(_read_config_mapping(target), "ui"))
+
+
 def save_app_config(config: AppConfig, path: Path | None = None, *, preserve_tools: bool = False) -> None:
     target = Path(path) if path is not None else app_config_path()
     if not target.parent.is_dir():
@@ -708,6 +738,7 @@ def load_app_config(
         template_path: Path | None = None,
         *,
         settings_path: Path | None = None,
+        initial_tools: dict[str, str] | None = None,
         on_tools_initialized: Callable[[AppConfig], None] | None = None,
         require_tools: bool = False,
 ) -> AppConfig:
@@ -724,7 +755,7 @@ def load_app_config(
     if initialize_tools:
         if require_tools:
             raise ValueError(f"Configuration is missing the tools section: {target}")
-        raw["tools"] = initial_tool_paths(target.parent, settings_path)
+        raw["tools"] = initial_tool_paths(target.parent, settings_path) if initial_tools is None else initial_tools
     config = app_config_from_mapping(raw)
     if not existing or initialize_tools or MKVTOOLNIX_TOOLS.keys() & raw["tools"].keys():
         save_app_config(config, target)
@@ -738,6 +769,7 @@ __all__ = [
     "CONFIG_SCHEMA_VERSION",
     "DEFAULT_CONFIG_FILENAME",
     "FUNCTION_PAGE_IDS",
+    "UI_SCALE_PERCENTAGES",
     "AppConfig",
     "AudioPreferences",
     "EncodePreferences",
@@ -757,5 +789,6 @@ __all__ = [
     "default_app_config",
     "default_config_path",
     "load_app_config",
+    "read_ui_scale_percent",
     "save_app_config",
 ]

@@ -14,6 +14,7 @@ from src.bdmv import Chapter
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
+from src.runtime.encode_command import CpuEncodeCommand
 from src.runtime.encode_results import EncodeBatchResult
 from src.runtime.hardware_encode import GpuEncodeDevice
 from src.runtime.sp import SpEntry, SpJob
@@ -504,7 +505,7 @@ class BluraySubtitleServiceBase:
     def detect_dovi_mux_pair(mpls_path: str, probe_m2ts: str, mux_dolby_vision: bool) -> Optional[dict[str, object]]:
         raise NotImplementedError
 
-    def encode_task(self, output_file: str, vpy_path: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='', audio_encoding: AudioEncodingSettings=AudioEncodingSettings(), wave64_bit_depth: int=32, audio_timeline_by_track: Optional[dict[int, tuple[tuple[float, float], ...]]]=None, detect_audio_gaps: bool=False, auto_crop_black_borders: bool=False, vpy_denoise_strength: float=0.6, vpy_dehalo_strength: float=0.0, vpy_dering_strength: float=0.0, vpy_deband_strength: float=0.5, vpy_antialiasing_strength: float=0.5, check_corrupted_frames: bool=False, frame_check_luma_psnr_threshold_db: float=30.0, frame_check_chroma_psnr_threshold_db: float=30.0, progress_name: str='', video_progress_name: str='', cancel_event: Optional[threading.Event]=None, hardware_device: GpuEncodeDevice | None=None) -> None:
+    def encode_task(self, output_file: str, vpy_path: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='', audio_encoding: AudioEncodingSettings=AudioEncodingSettings(), wave64_bit_depth: int=32, audio_timeline_by_track: Optional[dict[int, tuple[tuple[float, float], ...]]]=None, detect_audio_gaps: bool=False, auto_crop_black_borders: bool=False, vpy_denoise_strength: float=0.6, vpy_dehalo_strength: float=0.0, vpy_dering_strength: float=0.0, vpy_deband_strength: float=0.5, vpy_antialiasing_strength: float=0.5, check_corrupted_frames: bool=False, frame_check_luma_psnr_threshold_db: float=30.0, frame_check_chroma_psnr_threshold_db: float=30.0, progress_name: str='', video_progress_name: str='', cancel_event: Optional[threading.Event]=None, hardware_device: GpuEncodeDevice | None=None, cpu_command: CpuEncodeCommand | None=None, chroma_format: str='yuv420') -> None:
         raise NotImplementedError
 
     def episodes_encode(self, request: EncodeRequest, cancel_event: Optional[threading.Event]=None) -> EncodeBatchResult:

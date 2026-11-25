@@ -15,6 +15,33 @@ I18N_ZH_TO_EN = {
     '预设': 'Preset',
     '默认': 'Default',
     '压制参数': 'Encoder parameters',
+    '压制命令': 'Encoder command',
+    '色度采样': 'Chroma sampling',
+    '正在检测格式…': 'Checking formats...',
+    '无兼容格式': 'No compatible format',
+    '色度采样不受支持：{chroma}': 'Unsupported chroma sampling: {chroma}',
+    '请选择第 {row} 行设备 {device} 验证通过的色度采样。': 'Select a verified chroma format for {device} in row {row}.',
+    '编辑 CPU 压制命令。{params} 在启动时填入压制参数。命令从标准输入读取 Y4M。用 {output.h264}、{output.hevc} 或 {output.ivf} 指定临时视频文件。{metadata} 为内置编码器填入自动参数。工具路径占位符使用设置中的路径。': (
+        'Edit the CPU encoder command. {params} inserts the encoder parameters at launch. '
+        'The command reads Y4M from standard input. Use {output.h264}, {output.hevc}, or '
+        '{output.ivf} for the temporary video. {metadata} adds automatic options for built-in '
+        'encoders. Tool path placeholders use the configured paths.'
+    ),
+    '命令中含有空字符。': 'The command contains a null character.',
+    'Windows 无法解析此命令。': 'Windows could not parse the command.',
+    '压制命令无效。{error}': 'Invalid encoder command. {error}',
+    '压制参数无效。{error}': 'Invalid encoder parameters. {error}',
+    '请输入压制命令。': 'Enter an encoder command.',
+    '请从 {output.h264}、{output.hevc} 和 {output.ivf} 中选择一个输出占位符。': (
+        'Use exactly one of {output.h264}, {output.hevc}, or {output.ivf} as the output placeholder.'
+    ),
+    '压制命令中只能有一个 {metadata} 占位符。': 'The encoder command can contain only one {metadata} placeholder.',
+    '压制命令中只能有一个 {params} 占位符。': 'The encoder command can contain only one {params} placeholder.',
+    '无法使用路径 {path} 下的编码器。': 'Cannot use the encoder executable at {path}.',
+    '{metadata} 占位符须配合对应的内置编码器使用。': 'The {metadata} placeholder requires the matching built-in encoder.',
+    '压制命令须以 {format} 格式输出一条 {depth} 位 {chroma} 的 {codec} 视频。请检查 {path}。': (
+        'The encoder command must output one {codec} video at {depth}-bit {chroma} in {format} format. Check {path}.'
+    ),
     '参数预览': 'Parameter preview',
     '预设参数': 'Preset parameters',
     '检测 GPU': 'Detect GPUs',
@@ -35,12 +62,12 @@ I18N_ZH_TO_EN = {
     '缺少 GPU 能力查询工具。请运行环境配置脚本安装：{path}': 'GPU capability query tool is missing. Run setup to install it: {path}',
     'GPU 能力查询失败：{error}': 'GPU capability query failed: {error}',
     '驱动报告的编码组合：{modes}': 'Driver encoding modes: {modes}',
-    '正在测试 {codec}、{depth} 位、{preset}': 'Testing {codec}, {depth}-bit, {preset}',
     '通过': 'Passed',
-    '编码输出与测试要求不符': 'Unexpected encoder output',
-    '可用的 GPU 设备数：{count}': 'Usable GPU devices: {count}',
+    '可用的 GPU 设备数：{count}': 'Available GPU devices: {count}',
     '{device}：{formats}': '{device}: {formats}',
-    '{encoder} 的 {depth} 位输出无法保留 {feature}。将继续压制：{path}': '{feature} cannot be preserved with {encoder} at {depth}-bit. Encoding will continue: {path}',
+    '{encoder} 的 {depth} 位 {chroma} 输出无法保留 {feature}。将继续压制：{path}': (
+        '{feature} cannot be preserved with {encoder} at {depth}-bit {chroma}. Encoding will continue: {path}'
+    ),
     'VapourSynth 输出改变了色彩原色或传递特性，将省略来源中的 HDR 元数据：{path}': 'Source HDR metadata will not be retained because the VapourSynth output changed color primaries or transfer characteristics: {path}',
     'VapourSynth 输出改变了色彩原色或传递特性，将省略 HDR10+ 元数据：{path}': 'HDR10+ metadata will not be retained because the VapourSynth output changed color primaries or transfer characteristics: {path}',
     '无法准备 Dolby Vision 元数据。将继续压制：{path}。错误报告：{report}': 'Dolby Vision metadata could not be prepared. Encoding will continue: {path}. Error report: {report}',
@@ -56,7 +83,9 @@ I18N_ZH_TO_EN = {
     'GPU 压制预设必须包含对象': 'GPU encode presets must contain objects',
     'GPU 压制预设需要编码格式、位深和名称': 'GPU encode presets require a codec, bit depth, and name',
     '硬件压制参数不受支持或缺少值：{option}': 'Unsupported hardware encoder option or missing value: {option}',
-    '硬件编码未输出所选格式和位深：{path}': 'Hardware encoder did not produce the selected codec and bit depth: {path}',
+    '硬件编码未输出所选编码格式、位深和色度采样：{path}': (
+        'Hardware encoder did not produce the selected codec, bit depth and chroma sampling: {path}'
+    ),
     '窗口': 'Window',
     '许可证': 'License',
     '来源': 'Source',
@@ -292,6 +321,13 @@ I18N_ZH_TO_EN = {
     '界面语言': 'UI language',
     '主题': 'Theme',
     '界面字号': 'UI font size',
+    '界面缩放': 'UI scale',
+    '跟随系统': 'Follow system',
+    '在系统缩放基础上调整整个界面。重启应用后生效。': 'Scale the entire interface relative to the system scale. Takes effect after restarting the app.',
+    '立即重启应用以应用新的界面缩放？重启会关闭当前打开的内容。': 'Restart the app now to apply the new UI scale? Restarting closes the currently open content.',
+    '正在运行任务。新的界面缩放将在下次启动时生效。': 'A task is running. The new UI scale will take effect on the next launch.',
+    '立即重启': 'Restart now',
+    '稍后': 'Later',
     '窗口透明度': 'Window opacity',
     '窗口透明度需要 macOS、Windows 或启用了合成的 X11 会话。': 'Window opacity requires macOS, Windows or a composited X11 session.',
     '应用更新': 'Application updates',
@@ -411,6 +447,8 @@ I18N_ZH_TO_EN = {
     '{tool} 的路径 {path} 不存在或无法使用。': 'The path {path} for {tool} is missing or unusable.',
     '{path} 中的 {tool} 安装路径无效。': 'Invalid setup tool path for {tool} in {path}',
     '无法从 {path} 读取安装工具路径。{error}': 'Could not read setup tool paths from {path}. {error}',
+    '如需修改路径，请编辑 config.json。准备好后按回车继续。': 'Edit config.json to change any paths. Press Enter when ready to continue.',
+    '工具路径尚未确认。': 'Tool paths were not confirmed.',
     '无法加载程序设置：{error}': 'Could not load application settings: {error}',
     '无法保存程序设置：{error}': 'Could not save application settings: {error}',
     '无法恢复已保存的窗口位置和大小': 'Stored window geometry could not be restored',

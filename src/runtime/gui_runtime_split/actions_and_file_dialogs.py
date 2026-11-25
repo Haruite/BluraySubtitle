@@ -41,6 +41,7 @@ from src.exports.utils import (
     third_party_notices_markdown_path,
 )
 from src.runtime.encode_source import probe_svt_av1_bit_depths
+from src.runtime.encode_command import default_cpu_encode_command, format_encoder_command
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
@@ -196,6 +197,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         show_full_codec = fid == 4 and encode_visible
         show_diy_hint = fid == 5 and encode_visible
         self.encode_device_controls.set_diy_mode(fid == 5)
+        self.encode_command_row.setVisible(show_full_codec)
+        if show_full_codec:
+            self._refresh_cpu_encode_command()
         hint = getattr(self, 'diy_bd_encode_hint_label', None)
         self.encode_audio_row.setVisible(show_full_codec)
         if hint is not None:
@@ -885,6 +889,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 subtitle_mode=subtitle_mode,
                 encoder=encoder,
                 bit_depth=bit_depth,
+                chroma_format=self.encode_device_controls.cpu_box.chroma.currentData() or 'yuv420',
                 use_getnative=bool(
                     getattr(self, 'use_getnative_checkbox', None)
                     and self.use_getnative_checkbox.isChecked()
@@ -916,6 +921,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self.vpy_antialiasing_strength_spin.value()
                 ),
                 audio_encoding=self._captured_audio_encoding_settings(),
+                cpu_command=self.encode_command_edit.toPlainText(),
             )
             device_choices = self.encode_device_controls.gpu_choices()
             if self.encode_device_controls.cpu_checkbox.isChecked():
@@ -931,7 +937,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 key = combo.currentData() if isinstance(combo, QComboBox) else None
                 if key not in device_choices:
                     raise ValueError(self.t('Select a video encoding device in row {row}').format(row=row + 1))
-                return device_choices[key]
+                choice = device_choices[key]
+                if not choice.chroma_format:
+                    raise ValueError(self.t(
+                        'Select a verified chroma format for {device} in row {row}.'
+                    ).format(device=self.encode_device_controls.device_label(choice.device), row=row + 1))
+                return choice
 
             track_selection_snapshot = copy.deepcopy(
                 getattr(self, '_track_selection_config', {}) or {}
@@ -1197,7 +1208,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     ).items()
                 },
             )
-            validate_encode_request(request, check_tools=True)
+            request = validate_encode_request(request, check_tools=True)
         except Exception as error:
             print_tb_string_terminal(traceback.format_exc())
             self._show_error_dialog(str(error))
@@ -1534,6 +1545,23 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             custom_presets,
         )
 
+    def _refresh_cpu_encode_command(self) -> None:
+        if self.get_selected_function_id() == 5:
+            return
+        tool, depth = self._current_encode_tool_and_depth()
+        chroma_format = self.encode_device_controls.cpu_box.chroma.currentData() or 'yuv420'
+        try:
+            template = default_cpu_encode_command(
+                tool.lower(), depth, None, chroma_format=chroma_format, use_path_placeholder=True,
+            )
+        except ValueError:
+            # A tool change may emit a bit-depth signal before updating the chroma choices.
+            return
+        command = format_encoder_command(template.arguments)
+        if command != self._generated_cpu_encode_command:
+            self._generated_cpu_encode_command = command
+            self.encode_command_edit.setPlainText(command)
+
     def _refresh_encode_tool_dependent_ui(self, apply_preset: bool = True) -> None:
         if getattr(self, 'encode_tool_combo', None) is None:
             return
@@ -1559,6 +1587,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         else:
             self._encode_preset_params = dict(self._x265_preset_params)
         self._refill_encode_bit_depth_combo(tool)
+        self.encode_device_controls.set_cpu_chroma_formats(tool.lower())
         if getattr(self, 'x265_preset_combo', None) is not None:
             selected_preset = str(
                 self.x265_preset_combo.currentData()
@@ -1585,16 +1614,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 sync()
         except Exception:
             pass
-        if not apply_preset or getattr(self, 'x265_preset_combo', None) is None:
-            return
-        preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
-        params = self._encode_preset_params.get(preset, '')
-        self._encode_setting_updating = True
-        try:
-            if hasattr(self, 'x265_params_edit') and self.x265_params_edit:
+        if apply_preset and self.x265_preset_combo is not None:
+            preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
+            params = self._encode_preset_params.get(preset, '')
+            self._encode_setting_updating = True
+            try:
                 self.x265_params_edit.setPlainText(params)
-        finally:
-            self._encode_setting_updating = False
+            finally:
+                self._encode_setting_updating = False
+        self._refresh_cpu_encode_command()
 
     def init_encode_box(self):
         self._reload_encode_preset_parameters()
@@ -1619,6 +1647,30 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.encode_bit_depth_combo = cpu_box.bit_depth
         self.x265_preset_combo = cpu_box.preset
         self.x265_params_edit = cpu_box.parameters
+        self._generated_cpu_encode_command = ''
+
+        self.encode_command_row = QWidget(cpu_box.options)
+        command_layout = QHBoxLayout(self.encode_command_row)
+        command_layout.setContentsMargins(0, 0, 0, 0)
+        command_layout.setSpacing(6)
+        command_label = QLabel(self.t('Encoder command'), self.encode_command_row)
+        self.encode_command_edit = QPlainTextEdit(self.encode_command_row)
+        self.encode_command_edit.setObjectName('encodeCommandEdit')
+        self.encode_command_edit.setAccessibleName(command_label.text())
+        self.encode_command_edit.setFixedHeight(70)
+        self.encode_command_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        tooltip = (
+            'Edit the CPU encoder command. {params} inserts the encoder parameters at launch. '
+            'The command reads Y4M from standard input. Use {output.h264}, {output.hevc}, or '
+            '{output.ivf} for the temporary video. {metadata} adds automatic options for built-in '
+            'encoders. Tool path placeholders use the configured paths.'
+        )
+        self.encode_command_edit.setProperty('toolTipSource', tooltip)
+        self.encode_command_edit.setToolTip(self.t(tooltip))
+        command_label.setBuddy(self.encode_command_edit)
+        command_layout.addWidget(command_label)
+        command_layout.addWidget(self.encode_command_edit, 1)
+        cpu_box.options.layout().addWidget(self.encode_command_row)
 
         tools_row = QWidget(self.encode_box)
         tools_layout = QGridLayout()
@@ -1791,6 +1843,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 pass
 
         self.encode_bit_depth_combo.currentIndexChanged.connect(_sync_vpy_fmtc_from_encode_controls)
+        self.encode_bit_depth_combo.currentIndexChanged.connect(self._refresh_cpu_encode_command)
+        cpu_box.chroma.currentIndexChanged.connect(self._refresh_cpu_encode_command)
         self._apply_encode_codec_slot_visibility()
         self._refresh_encode_tool_dependent_ui(True)
 

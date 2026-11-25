@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 from PyQt6.QtCore import QByteArray, QThread, QTimer
-from PyQt6.QtWidgets import QComboBox, QWidget
+from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QWidget
 
 from src.core.app_config import AppConfig, UiPreferences, WindowPreferences, save_app_config
 from src.core.tool_paths import active_tool_paths
@@ -59,6 +59,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         finally:
             self._encode_setting_updating = False
         self.encode_device_controls.restore(encode)
+        self._refresh_cpu_encode_command()
 
     def _apply_saved_encode_defaults(self) -> None:
         self._apply_saved_encode_devices()
@@ -221,8 +222,32 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         start_program_update(package)
         QTimer.singleShot(0, self._exit_application)
 
+    def _confirm_ui_scale_restart(self, dialog: SettingsDialog) -> bool:
+        title = self.t("UI scale")
+        if (getattr(self, "_current_cancel_event", None) is not None or self._bdmv_load_pending
+                or any(thread.isRunning() for thread in self.findChildren(QThread))):
+            AnimatedMessageBox.information(
+                dialog, title, self.t("A task is running. The new UI scale will take effect on the next launch."),
+            )
+            return False
+        prompt = AnimatedMessageBox(
+            AnimatedMessageBox.Icon.Question, title,
+            self.t("Restart the app now to apply the new UI scale? Restarting closes the currently open content."),
+            parent=dialog,
+        )
+        restart = prompt.addButton(self.t("Restart now"), AnimatedMessageBox.ButtonRole.AcceptRole)
+        later = prompt.addButton(self.t("Later"), AnimatedMessageBox.ButtonRole.RejectRole)
+        prompt.setDefaultButton(later)
+        prompt.exec()
+        confirmed = prompt.clickedButton() == restart
+        prompt.deleteLater()
+        return confirmed
+
     def _show_settings_dialog(self) -> None:
+        restart_requested = False
+
         def apply_config(config: AppConfig, resolved_tools: Mapping[str, str]) -> bool:
+            nonlocal restart_requested
             previous = self._app_config
             previous_ui = self._current_ui_preferences()
             selected = replace(config, window=self._current_window_preferences())
@@ -249,7 +274,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             if selected.encode != previous.encode or tools_changed:
                 self._refresh_encode_tool_dependent_ui(refresh_cpu_parameters)
             if any(getattr(selected.encode, name) != getattr(previous.encode, name) for name in (
-                "encoder", "bit_depth", "preset", "cpu_enabled", "cpu_parameters",
+                "encoder", "bit_depth", "preset", "chroma_format", "cpu_enabled", "cpu_parameters",
             )):
                 self._apply_saved_encode_devices()
             elif selected.encode.gpu_devices != previous.encode.gpu_devices:
@@ -273,6 +298,11 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
                 self._refresh_table1_remux_cmds()
             self._apply_saved_ui_preferences(previous_ui)
             self._apply_window_opacity(dialog)
+            if selected.ui.scale_percent != previous.ui.scale_percent:
+                active_scale = QApplication.instance().property("uiScalePercent") or 0
+                if selected.ui.scale_percent != active_scale and self._confirm_ui_scale_restart(dialog):
+                    restart_requested = True
+                    QTimer.singleShot(0, lambda: dialog.done(QDialog.DialogCode.Accepted))
             return True
 
         dialog = SettingsDialog(
@@ -289,6 +319,9 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         self._apply_window_opacity(dialog)
         dialog.exec()
         dialog.deleteLater()
+        if restart_requested:
+            self._restart_for_ui_scale = True
+            self._exit_application()
 
     def _current_ui_preferences(self) -> UiPreferences:
         font_size = int(getattr(self, "_ui_font_point_size", 10) or 10)

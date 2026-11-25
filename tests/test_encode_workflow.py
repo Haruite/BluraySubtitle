@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import select
 import subprocess
@@ -18,6 +19,7 @@ from src.core.tool_paths import default_tool_paths, tool_path, using_tool_paths
 from src.exports.utils import terminate_process_trees
 from src.runtime import dolby_vision
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
+from src.runtime.encode_command import format_encoder_command
 from src.runtime.encode_results import (
     EncodeBatchResult,
     EncodeRowResult,
@@ -126,7 +128,45 @@ class _PipelineService(EncodeAudioTasksMixin):
 
 
 class EncodeWorkflowTests(unittest.TestCase):
-    def test_windows_arm64_trials_match_vulkan_to_the_nvidia_adapter(self) -> None:
+    def test_cpu_command_uses_its_visible_executable_and_output_instead_of_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / 'source'
+            source_dir.mkdir()
+            source = source_dir / 'input.mkv'
+            source.touch()
+            vpy = root / 'encode.vpy'
+            vpy.touch()
+            output = root / 'output' / 'episode.mkv'
+            request = EncodeRequest(
+                'remux', str(source_dir), str(output.parent), '',
+                (EncodeRow(str(source), str(output), str(vpy)),), (), _settings(),
+            )
+            tool_paths = dict.fromkeys(
+                ('VSPIPE_PATH', 'FFPROBE_PATH', 'MKV_MERGE_PATH', 'MKV_EXTRACT_PATH'), sys.executable,
+            )
+            tool_paths.update(PLUGIN_PATH='', X265_PATH=str(root / 'missing-x265'))
+            report = str(root / 'stats with spaces.txt')
+            text = format_encoder_command((sys.executable, '--stats', report, '--output={output.ivf}', '-'))
+            with using_tool_paths(tool_paths):
+                prepared = validate_encode_request(
+                    replace(request, settings=replace(request.settings, cpu_command=text)), check_tools=True,
+                )
+                with self.assertRaisesRegex(ValueError, 'output placeholder'):
+                    validate_encode_request(
+                        replace(request, settings=replace(request.settings, cpu_command=sys.executable)),
+                        check_tools=True,
+                    )
+            command = prepared.settings.cpu_command
+            self.assertIsNotNone(command)
+            temporary = str(root / 'temporary video.ivf')
+            self.assertEqual(command.materialize(temporary, ('--crf', '38')), [
+                os.path.abspath(sys.executable), '--stats', report, f'--output={temporary}', '-',
+            ])
+            self.assertEqual(command.output_extension, '.ivf')
+            self.assertFalse(output.parent.exists())
+
+    def test_windows_arm64_discovery_matches_vulkan_to_nvidia_without_trials(self) -> None:
         nvenc = GpuEncodeDevice('nvidia', 'NVIDIA', 'nvenc', 'd3d11va', '0', hardware_id='luid:01')
         qsv = GpuEncodeDevice('intel', 'Intel', 'qsv', 'd3d11va', '1', hardware_id='luid:02')
         listed = b' V..... hevc_nvenc\n V..... h264_nvenc\n V..... hevc_mf\n V..... hevc_qsv\n V..... ffv1_vulkan\n'
@@ -153,19 +193,42 @@ class EncodeWorkflowTests(unittest.TestCase):
                 patch.object(hardware_encode, '_windows_arm64', return_value=True),
                 patch.object(hardware_encode, '_windows_adapters', return_value=[nvenc, qsv]),
                 patch.object(hardware_encode, 'run_command', side_effect=run),
-                patch.object(hardware_encode, '_verify_hardware_preset', return_value=(True, {})) as verify,
             ):
                 devices = hardware_encode.discover_gpu_encoders(str(root / 'ffmpeg.exe'), str(root / 'ffprobe.exe'))
 
         device, = devices
         self.assertEqual((device.key, device.formats), ('nvidia', (('hevc', '8'), ('ffv1', '10'), ('ffv1', '12'))))
-        self.assertEqual([call.args[2].device.key for call in verify.call_args_list], ['nvidia'] * 7)
         presets = hardware_encode.gpu_presets(device, 'ffv1', '12')
         self.assertEqual(set(presets), {'Fast', 'Balanced'})
         choice = VideoEncodeChoice('ffv1', '12', presets['Balanced'], device)
         command = hardware_encode_command('ffmpeg', choice, ['-i', 'pipe:0'], ['-f', 'matroska', 'output.mkv'])
         self.assertEqual(command[command.index('-init_hw_device') + 1], 'vulkan=encode:00000000-0000-0000-0000-000000000001')
         self.assertEqual(command[command.index('-c:v') + 1], 'ffv1_vulkan')
+
+    def test_chroma_probe_keeps_only_formats_produced_by_the_selected_gpu_mode(self) -> None:
+        device = GpuEncodeDevice('nvidia', 'NVIDIA', 'nvenc', 'd3d11va', '2', cuda_adapter='1')
+        choice = VideoEncodeChoice('hevc', '10', '-preset p7 -cq 20', device)
+
+        def run(args, **kwargs):
+            if args[0] == 'ffprobe':
+                pixels = kwargs['input'].decode()
+                result = {'streams': [{'codec_name': 'hevc', 'pix_fmt': pixels, 'nb_read_frames': '4'}]}
+                return subprocess.CompletedProcess(args, 0, json.dumps(result).encode(), b'')
+            self.assertEqual(args[args.index('-c:v') + 1], 'hevc_nvenc')
+            self.assertEqual(args[args.index('-preset') + 1], 'p7')
+            self.assertEqual(args[args.index('-cq') + 1], '20')
+            pixel_format = args[args.index('-vf') + 1].split(',')[0]
+            if pixel_format == 'format=p010le':
+                self.assertIn('d3d11va=adapter:2', args)
+            else:
+                self.assertEqual(args[args.index('-gpu') + 1], '1')
+            # The driver silently falls back to 4:2:0 for the 4:4:4 trial.
+            decoded = b'yuv422p10le' if pixel_format == 'format=p210le' else b'yuv420p10le'
+            return subprocess.CompletedProcess(args, 0, decoded, b'')
+
+        with patch.object(hardware_encode, 'run_command', side_effect=run):
+            formats = hardware_encode.probe_gpu_chroma_formats('ffmpeg', 'ffprobe', choice, threading.Event())
+        self.assertEqual(formats, ('yuv420', 'yuv422'))
 
     def test_prores_hardware_command_selects_12_bit_4444(self) -> None:
         device = GpuEncodeDevice('macos', 'VideoToolbox', 'videotoolbox')

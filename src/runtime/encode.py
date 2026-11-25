@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from src.core.i18n import translate_text
 from src.core.tool_paths import ENCODER_PATH_NAMES, require_tool_path, tool_path
+from src.core.video_format import CHROMA_FORMATS
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
     validate_audio_cleanup_tools,
     validate_audio_conversion_tools,
 )
 from src.runtime.frame_check import frame_check_report_path
+from src.runtime.encode_command import CpuEncodeCommand, capture_cpu_encode_command
 from src.runtime.encode_source import probe_svt_av1_bit_depths
-from src.runtime.hardware_encode import GPU_BACKENDS, VideoEncodeChoice, hardware_encoder_parameters
+from src.runtime.hardware_encode import GPU_BACKENDS, VideoEncodeChoice, gpu_chroma_candidates, hardware_encoder_parameters
 from src.runtime.sp import SpEntry
 
 
@@ -39,9 +41,19 @@ class EncodeSettings:
     vpy_deband_strength: float = 0.5
     vpy_antialiasing_strength: float = 0.5
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
+    # Skip resolving an unused CPU command for GPU-only jobs or completed outputs.
+    cpu_command: CpuEncodeCommand | str | None = None
+    chroma_format: str = 'yuv420'
 
     def cpu_encode_choice(self) -> VideoEncodeChoice:
-        return VideoEncodeChoice(self.encoder, self.bit_depth, self.encoder_parameters)
+        return VideoEncodeChoice(self.encoder, self.bit_depth, self.encoder_parameters, chroma_format=self.chroma_format)
+
+    def resolve_cpu_command(self) -> CpuEncodeCommand | None:
+        if not isinstance(self.cpu_command, str):
+            return self.cpu_command
+        return capture_cpu_encode_command(
+            self.cpu_command, self.encoder_parameters, bit_depth=self.bit_depth, chroma_format=self.chroma_format,
+        )
 
 
 @dataclass(frozen=True)
@@ -85,8 +97,8 @@ class EncodeRequest:
     main_alternate_mpls: dict[str, tuple[str, ...]] | None = None
 
 
-def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -> None:
-    """Reject deterministic request errors before Encode creates an output."""
+def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -> EncodeRequest:
+    """Check the request and capture the visible CPU command when a row needs it."""
     if request.input_mode not in ('bdmv', 'remux'):
         raise ValueError(
             translate_text('Unsupported encode input mode: {mode}').format(mode=request.input_mode)
@@ -95,6 +107,7 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         ('subtitle_mode', request.settings.subtitle_mode, ('external', 'soft', 'hard')),
         ('encoder', request.settings.encoder, ('x264', 'x265', 'svtav1')),
         ('bit_depth', request.settings.bit_depth, ('8', '10', '12')),
+        ('chroma_format', request.settings.chroma_format, CHROMA_FORMATS),
         (
             'default_lossless_audio_codec',
             request.settings.default_lossless_audio_codec,
@@ -265,11 +278,15 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         if not row_is_checkpoint and choice is not None:
             device = choice.device
             if device is None:
-                supported = choice.encoder in ENCODER_PATH_NAMES and choice.bit_depth in (
-                    ('8', '10') if choice.encoder == 'x264' else ('8', '10', '12')
+                supported = (
+                    choice.chroma_format in CHROMA_FORMATS and choice.encoder in ENCODER_PATH_NAMES
+                    and choice.bit_depth in (('8', '10') if choice.encoder == 'x264' else ('8', '10', '12'))
                 )
             else:
-                supported = device.backend in GPU_BACKENDS and (choice.encoder, choice.bit_depth) in device.formats
+                supported = (
+                    device.backend in GPU_BACKENDS and (choice.encoder, choice.bit_depth) in device.formats
+                    and choice.output_chroma_format in gpu_chroma_candidates(choice)
+                )
             if not supported:
                 raise ValueError(translate_text('Unsupported video encoding mode in row {row}').format(row=row_number))
             if device is not None:
@@ -409,7 +426,7 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 )
 
     if not check_tools:
-        return
+        return request
     pending_rows = [
         (row, is_sp_row)
         for row, is_sp_row in selected_rows
@@ -433,8 +450,20 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         if tool_path("PLUGIN_PATH"):
             require_tool_path("PLUGIN_PATH")
         choices = {row.video_encode or request.settings.cpu_encode_choice() for row, _ in pending_video_rows}
-        for encoder, depth in {(choice.encoder, choice.bit_depth) for choice in choices if choice.device is None}:
-            encoder_path = require_tool_path(ENCODER_PATH_NAMES[encoder])
+        cpu_modes = {(choice.encoder, choice.bit_depth) for choice in choices if choice.device is None}
+        cpu_command = request.settings.cpu_command
+        if cpu_modes and isinstance(cpu_command, str):
+            cpu_command = request.settings.resolve_cpu_command()
+            request = replace(request, settings=replace(request.settings, cpu_command=cpu_command))
+        if cpu_modes and cpu_command is not None:
+            require_tool_path("FFPROBE_PATH")
+        for encoder, depth in cpu_modes:
+            if cpu_command is not None:
+                if depth != '12' or cpu_command.encoder != 'svtav1' or not cpu_command.uses_builtin_encoder():
+                    continue
+                encoder, encoder_path = cpu_command.encoder, cpu_command.arguments[0]
+            else:
+                encoder_path = require_tool_path(ENCODER_PATH_NAMES[encoder])
             if encoder == 'svtav1' and depth == '12' and '12' not in probe_svt_av1_bit_depths(encoder_path):
                 raise ValueError(translate_text(
                     'The selected SVT-AV1 encoder does not advertise 12-bit support: {path}'
@@ -479,6 +508,7 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     ):
         require_tool_path("FFMPEG_PATH")
         require_tool_path("FFPROBE_PATH")
+    return request
 
 
 __all__ = ['EncodeRequest', 'EncodeRow', 'EncodeSettings', 'validate_encode_request']

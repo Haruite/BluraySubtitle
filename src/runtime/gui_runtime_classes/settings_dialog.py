@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 from src.core.app_config import (
     MAX_BACKGROUND_BLUR,
     MAX_LOG_LINE_LIMIT,
+    UI_SCALE_PERCENTAGES,
     AppConfig,
     AudioPreferences,
     EncodePreferences,
@@ -126,13 +127,22 @@ class SettingsDialog(AnimatedDialog):
 
         layout = QVBoxLayout(self)
         tabs = QTabWidget(self)
-        self._general_scroll = self._build_general_tab()
-        tabs.addTab(self._general_scroll, self.t("General"))
-        tabs.addTab(self._build_fonts_tab(), self.t("Fonts"))
-        tabs.addTab(self._build_paths_tab(), self.t("Paths"))
-        tabs.addTab(self._build_advanced_tab(), self.t("Advanced"))
-        tabs.addTab(self._build_tools_tab(), self.t("Tools"))
-        tabs.addTab(self._build_external_tools_tab(), self.t("External tools"))
+        for name, build_page in (
+            ("General", self._build_general_tab),
+            ("Fonts", self._build_fonts_tab),
+            ("Paths", self._build_paths_tab),
+            ("Advanced", self._build_advanced_tab),
+            ("Tools", self._build_tools_tab),
+            ("External tools", self._build_external_tools_tab),
+        ):
+            page = build_page()
+            scroll = QScrollArea(tabs)
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(page)
+            page.setAutoFillBackground(False)
+            if tabs.addTab(scroll, self.t(name)) == 0:
+                self._general_scroll = scroll
         layout.addWidget(tabs)
         self._add_settings_buttons(layout)
         self._set_controls(config)
@@ -174,32 +184,42 @@ class SettingsDialog(AnimatedDialog):
                 return
             available = screen.availableGeometry()
             frame = self.frameGeometry()
+            left = max(available.left(), min(frame.left(), available.right() - frame.width() + 1))
             top = max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1))
-            if top != frame.top():
-                self.move(frame.left(), top)
+            if left != frame.left() or top != frame.top():
+                self.move(left, top)
 
     def _fit_general_tab_height(self) -> None:
         screen = self.screen()
         if screen is None:
             return
         scroll = self._general_scroll
+        available = screen.availableGeometry()
+        style = self.style()
+        frame_width = max(
+            self.frameGeometry().width() - self.width(),
+            2 * style.pixelMetric(QStyle.PixelMetric.PM_DefaultFrameWidth, widget=self),
+        )
+        available_width = available.width() - frame_width
+        self.setMinimumWidth(min(self.minimumWidth(), available_width))
+        if self.width() > available_width:
+            self.resize(available_width, self.height())
         viewport = scroll.maximumViewportSize()
         general = scroll.widget()
         content_height = general.heightForWidth(viewport.width())
         if content_height < 0:
             content_height = general.sizeHint().height()
         controls_height = self.height() - viewport.height()
-        style = self.style()
         # The window manager may supply the frame margins only after mapping.
         frame_height = max(
             self.frameGeometry().height() - self.height(),
             style.pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight, widget=self)
             + 2 * style.pixelMetric(QStyle.PixelMetric.PM_DefaultFrameWidth, widget=self),
         )
-        available_height = screen.availableGeometry().height() - frame_height
+        available_height = available.height() - frame_height
         self.resize(self.width(), min(content_height + controls_height, available_height))
 
-    def _build_general_tab(self) -> QScrollArea:
+    def _build_general_tab(self) -> QWidget:
         tab = QWidget(self)
         form = QFormLayout(tab)
 
@@ -237,6 +257,16 @@ class SettingsDialog(AnimatedDialog):
         self.theme_combo.addItem(self.t("Dark"), "dark")
         self.theme_combo.addItem(self.t("Colorful"), "colorful")
         form.addRow(self.t("Theme"), self.theme_combo)
+
+        self.ui_scale_combo = StyledComboBox(tab)
+        for percent in UI_SCALE_PERCENTAGES:
+            self.ui_scale_combo.addItem(f"{percent}%" if percent else self.t("Follow system"), percent)
+        scale_label = QLabel(self.t("UI scale"), tab)
+        scale_label.setBuddy(self.ui_scale_combo)
+        scale_hint = self.t("Scale the entire interface relative to the system scale. Takes effect after restarting the app.")
+        self.ui_scale_combo.setToolTip(scale_hint)
+        scale_label.setToolTip(scale_hint)
+        form.addRow(scale_label, self.ui_scale_combo)
 
         self.opacity_spin = StyledSpinBox(tab)
         self.opacity_spin.setRange(60, 100)
@@ -283,11 +313,7 @@ class SettingsDialog(AnimatedDialog):
         for index in range(self.theme_combo.count()):
             self.log_theme_combo.addItem(self.theme_combo.itemText(index), self.theme_combo.itemData(index))
         form.addRow(self.t("Log window theme"), self.log_theme_combo)
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(tab)
-        tab.setAutoFillBackground(False)
-        return scroll
+        return tab
 
     def _build_tools_tab(self) -> QWidget:
         tab = QWidget(self)
@@ -588,12 +614,7 @@ class SettingsDialog(AnimatedDialog):
 
     def _build_advanced_tab(self) -> QWidget:
         tab = QWidget(self)
-        tab_layout = QVBoxLayout(tab)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea(tab)
-        scroll.setWidgetResizable(True)
-        content = QWidget(scroll)
-        layout = QVBoxLayout(content)
+        layout = QVBoxLayout(tab)
 
         audio_group = QGroupBox(self.t("Audio encoding"), tab)
         audio_form = QFormLayout(audio_group)
@@ -869,8 +890,6 @@ class SettingsDialog(AnimatedDialog):
         )
         layout.addWidget(encode_group)
         layout.addStretch(1)
-        scroll.setWidget(content)
-        tab_layout.addWidget(scroll)
         return tab
 
     def _refresh_advanced_encode_options(self, refresh_presets: bool) -> None:
@@ -899,6 +918,7 @@ class SettingsDialog(AnimatedDialog):
             self.default_bit_depth_combo.setCurrentIndex(max(0, index))
         finally:
             self.default_bit_depth_combo.blockSignals(False)
+        self.encode_device_controls.set_cpu_chroma_formats(encoder)
         if refresh_presets:
             self._cpu_preset_editor.set_mode(encoder, encode_presets_for_encoder(encoder))
 
@@ -975,6 +995,10 @@ class SettingsDialog(AnimatedDialog):
         except ValueError as error:
             self.external_tools_status_label.setText(str(error))
             return False
+        with using_tool_paths(self._resolved_tools):
+            self.encode_device_controls.set_chroma_tool_paths(
+                self._resolved_tools["FFMPEG_PATH"], self._resolved_tools["FFPROBE_PATH"],
+            )
         missing = []
         optional = {"MPV_CONFIG_PATH", "MPV_PATH", "LIBASS_PATH"}
         if sys.platform == "win32" or bundle_directory() is None:
@@ -1059,6 +1083,7 @@ class SettingsDialog(AnimatedDialog):
             self._start_gpu_detection(diagnostics=False)
 
     def _cancel_gpu_diagnostic(self) -> None:
+        self.encode_device_controls.cancel_probe()
         if self._gpu_diagnostic_thread is not None:
             self._gpu_diagnostic_thread.cancel.set()
 
@@ -1080,7 +1105,7 @@ class SettingsDialog(AnimatedDialog):
                 device = devices.get(saved.device)
                 validate_custom_preset_names(
                     saved.custom_presets,
-                    lambda scope: gpu_presets(device, *scope, verified_only=False) if device is not None else (),
+                    lambda scope: gpu_presets(device, *scope, available_only=False) if device is not None else (),
                     self.t,
                 )
                 parameters.update(preset.parameters.strip() for preset in saved.custom_presets)
@@ -1121,7 +1146,7 @@ class SettingsDialog(AnimatedDialog):
         return True
 
     @staticmethod
-    def _set_combo_data(combo: QComboBox, value: str) -> None:
+    def _set_combo_data(combo: QComboBox, value: str | int) -> None:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
 
@@ -1133,6 +1158,7 @@ class SettingsDialog(AnimatedDialog):
         self._set_combo_data(self.episode_mode_combo, config.startup.episode_mode)
         self._set_combo_data(self.language_combo, config.ui.language)
         self._set_combo_data(self.theme_combo, config.ui.theme)
+        self._set_combo_data(self.ui_scale_combo, config.ui.scale_percent)
         self.font_size_spin.setValue(config.ui.font_size)
         for role, combo in self.font_family_combos.items():
             family = getattr(config.ui.fonts, role)
@@ -1245,6 +1271,7 @@ class SettingsDialog(AnimatedDialog):
                 language=str(self.language_combo.currentData()),
                 theme=str(self.theme_combo.currentData()),
                 font_size=self.font_size_spin.value(),
+                scale_percent=int(self.ui_scale_combo.currentData()),
                 opacity=self.opacity_spin.value(),
                 save_log_to_file=self.save_log_checkbox.isChecked(),
                 log_line_limit=self.log_line_limit_spin.value(),
@@ -1297,6 +1324,7 @@ class SettingsDialog(AnimatedDialog):
             encode=EncodePreferences(
                 encoder=str(self.default_encoder_combo.currentData()),
                 bit_depth=str(self.default_bit_depth_combo.currentData()),
+                chroma_format=self.encode_device_controls.cpu_box.chroma.currentData() or "yuv420",
                 preset=cpu_editor.selected_name.strip(),
                 custom_presets=tuple(
                     replace(preset, name=preset.name.strip(), parameters=preset.parameters.strip())

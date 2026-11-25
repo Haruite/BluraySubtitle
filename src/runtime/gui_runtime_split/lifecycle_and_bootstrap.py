@@ -16,7 +16,7 @@ from collections import deque
 from typing import Optional
 from uuid import uuid4
 
-from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
+from PyQt6.QtCore import QSize, Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QSizePolicy, QScrollArea, \
     QFrame, QMenu, QStyle, QSystemTrayIcon
@@ -41,6 +41,31 @@ from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox
 from src.runtime.gui_runtime_classes.window_background import WindowBackground
 from src.runtime.gui_runtime_classes.window_caption import prepare_window_caption
 from .gui_base import BluraySubtitleGuiBase
+
+
+class _ToolbarPreferencesScroll(QScrollArea):
+    """Keep toolbar actions visible when the appearance controls need to scroll."""
+
+    def __init__(self, preferences: QWidget, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName('toolbarPreferencesScroll')
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setWidget(preferences)
+        preferences.setAutoFillBackground(False)
+        self.horizontalScrollBar().rangeChanged.connect(self.updateGeometry)
+
+    def sizeHint(self) -> QSize:
+        size = self.widget().sizeHint()
+        scrollbar = self.horizontalScrollBar()
+        if scrollbar.maximum() > 0:
+            size.setHeight(size.height() + scrollbar.sizeHint().height())
+        return size
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(0, self.sizeHint().height())
 
 
 class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
@@ -98,6 +123,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._sp_scan_error = ''
         self._retired_sp_scans: list[tuple[QThread, object]] = []
         self._close_pending = False
+        self._restart_for_ui_scale = False
         self.init_ui()
 
     def init_ui(self):
@@ -122,7 +148,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.content_scroll.setObjectName('contentScroll')
         self.content_scroll.setWidgetResizable(True)
         self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if not self._app_config.ui.scale_percent:
+            self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content_scroll.verticalScrollBar().setSingleStep(32)
         content = QWidget()
         content.setObjectName('scrollContent')
@@ -133,10 +160,13 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
         language_row = QWidget(self)
         language_row.setObjectName('mainToolbar')
-        language_layout = QHBoxLayout()
-        language_layout.setContentsMargins(8, 0, 8, 0)
+        toolbar_layout = QHBoxLayout(language_row)
+        toolbar_layout.setContentsMargins(8, 0, 8, 0)
+        toolbar_layout.setSpacing(6)
+        toolbar_preferences = QWidget(language_row)
+        language_layout = QHBoxLayout(toolbar_preferences)
+        language_layout.setContentsMargins(0, 0, 0, 0)
         language_layout.setSpacing(6)
-        language_row.setLayout(language_layout)
         self.language_label = QLabel('Language', language_row)
         self.language_combo = StyledComboBox(language_row)
         self.language_combo.addItem('English', 'en')
@@ -201,16 +231,17 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         )
         language_layout.addWidget(self.third_party_notices_btn)
         language_layout.addStretch(1)
+        toolbar_layout.addWidget(_ToolbarPreferencesScroll(toolbar_preferences, language_row), 1)
         self.view_log_button = QPushButton(self.t('View Log'), language_row)
         self.view_log_button.setEnabled(self._application_log is not None)
         self.view_log_button.clicked.connect(self._show_log_dialog)
-        language_layout.addWidget(self.view_log_button)
+        toolbar_layout.addWidget(self.view_log_button)
         self.settings_button = QPushButton(self.t('Settings'), language_row)
         self.settings_button.clicked.connect(lambda _=None: self._show_settings_dialog())
-        language_layout.addWidget(self.settings_button)
+        toolbar_layout.addWidget(self.settings_button)
         self.exit_button = QPushButton(self.t('Exit'), language_row)
         self.exit_button.clicked.connect(self._exit_application)
-        language_layout.addWidget(self.exit_button)
+        toolbar_layout.addWidget(self.exit_button)
         outer_layout.addWidget(language_row)
         self._startup_update_notice = StartupUpdateNotice(self._start_program_update, self)
         outer_layout.addWidget(self._startup_update_notice)

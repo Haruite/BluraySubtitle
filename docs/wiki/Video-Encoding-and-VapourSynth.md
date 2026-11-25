@@ -8,21 +8,21 @@ This page covers encoder settings and the VPy processing path. For container, co
 
 | Encoder | Supported output depth | Practical tradeoff |
 | --- | --- | --- |
-| x264 / AVC | 8-bit default; 10-bit sets `--profile high10` | Mature, generally faster, and broadly compatible with older players; usually needs more data than a well-configured newer codec |
+| x264 / AVC | 8-bit or 10-bit | Mature, generally faster, and broadly compatible with older players; usually needs more data than a well-configured newer codec |
 | x265 / HEVC | 8/10/12-bit; 10-bit default | Project default; better compression efficiency at greater encoding cost. Dolby Vision preservation requires 10-bit. |
 | SVT-AV1 | Depends on the selected build; standard builds support 8/10-bit | Modern compression and film-grain tools; check decoder support. The current workflow omits Dolby Vision with a task message. |
 
 Ten-bit SDR output can reduce quantization/banding problems but does not turn SDR into HDR. Codec background belongs in [Media Formats](Media-Formats-and-Dolby-Vision.md#video-formats).
 
-The setup scripts build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit only when the configured executable lists `12` among its `--input-depth` values in `--help`. Saving a new SVT-AV1 path refreshes the available bit depths. Other AV1 encoders such as aomenc and rav1e use different command lines and cannot replace `SvtAv1EncApp` in this workflow.
+The setup scripts build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit for SVT-AV1 when the configured executable lists `12` among its `--input-depth` values in `--help`. Saving a new SVT-AV1 path refreshes the available bit depths.
 
 Quality depends on source texture/motion, encoder version, rate control, preset, filters, and playback conditions. Compare representative samples from the same source at the intended viewing distance; transcoding one test result into another codec adds generation loss and biases the comparison.
 
 ## Video encoding devices
 
-**Enable GPU encoding** is off by default. Turn it on in **Settings → Advanced → Video encoding devices** to show GPU settings and the **Video encoding device** column for main and SP videos. Encode and Advanced settings group the codec, bit depth, and preset by device.
+**Enable GPU encoding** is off by default. Turn it on in **Settings → Advanced → Video encoding devices** to show GPU settings and the **Video encoding device** column for main and SP videos. Each device groups its codec, bit depth, preset, and chroma sampling together.
 
-Detection queries the device driver for available codecs and depths. FFmpeg then tests the reported modes and their presets, and FFprobe checks the encoded frames. **Detect GPUs** runs the same checks. **Copy report** includes the driver capabilities, attempted commands and verified modes. For a source installation, setup installs the capability query executable alongside FFmpeg.
+**Detect GPUs** queries the available codecs, depths, and driver capabilities. **Copy report** includes the driver results and query commands. After you select a GPU and its encoding parameters, FFmpeg tries the chroma formats for that combination. The **Chroma sampling** list shows the formats that FFprobe confirms in the resulting streams. For a source installation, setup installs the capability query executable alongside FFmpeg.
 
 | Setup target | Hardware backends |
 | --- | --- |
@@ -32,13 +32,32 @@ Detection queries the device driver for available codecs and depths. FFmpeg then
 | Linux ARM64 | NVIDIA NVENC and Vulkan where supported by the installed driver |
 | macOS Intel and Apple silicon | The system-selected VideoToolbox hardware encoder and Vulkan via MoltenVK |
 
-For a GPU to appear, the configured FFmpeg must include its hardware backend and the host needs a working vendor driver. The Linux AMF interface uses a driver-selected Vulkan adapter, so the app offers it when there is a single AMD render adapter. VideoToolbox exposes one system-selected device. A custom Windows x64 FFmpeg with Media Foundation can offer the system-selected 8-bit encoder when no vendor backend passes. [FFmpeg hardware device documentation](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options) · [NVIDIA native ARM64 NVENC requirements](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#basic-encoding-flow)
+For a GPU to appear, the configured FFmpeg must include its hardware backend and the host needs a working vendor driver. The Linux AMF interface uses a driver-selected Vulkan adapter, so the app offers it when there is a single AMD render adapter. VideoToolbox exposes one system-selected device. A custom Windows x64 FFmpeg with Media Foundation can offer the system-selected 8-bit encoder when no vendor backend advertises a mode. [FFmpeg hardware device documentation](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options) · [NVIDIA native ARM64 NVENC requirements](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#basic-encoding-flow)
 
-Vulkan runs FFV1 encoding on the GPU's compute shaders. It requires a Vulkan 1.3 GPU driver and an FFmpeg build with `ffv1_vulkan`. BluraySubtitle offers verified 8-, 10-, and 12-bit 4:2:0 modes and muxes the lossless FFV1 version 4 video into the final MKV. A GPU that also provides a vendor encoder offers FFV1 in the same device settings. [FFV1 format and uses](Media-Formats-and-Dolby-Vision.md#ffv1) · [FFmpeg Vulkan compute codecs](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
+Vulkan runs FFV1 encoding on the GPU's compute shaders. It requires a Vulkan 1.3 GPU driver and an FFmpeg build with `ffv1_vulkan`. BluraySubtitle can offer `yuv420`, `yuv422`, and `yuv444` at 8, 10, and 12 bits when the modes pass the short encode. The app muxes lossless FFV1 version 4 video into the final MKV. [FFV1 format and uses](Media-Formats-and-Dolby-Vision.md#ffv1) · [FFmpeg Vulkan compute codecs](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
 
-On macOS, VideoToolbox can offer 10-bit ProRes 422 and 12-bit ProRes 4444 profiles. BluraySubtitle offers the profiles that pass a short hardware encode and muxes the video into the final MKV. [ProRes profiles and uses](Media-Formats-and-Dolby-Vision.md#apple-prores) · [Apple VideoToolbox encoder capabilities](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
+On macOS, the VideoToolbox ProRes preset determines sampling. The driver can offer 10-bit ProRes 422 and 12-bit ProRes 4444 profiles. [ProRes profiles and uses](Media-Formats-and-Dolby-Vision.md#apple-prores) · [Apple VideoToolbox encoder capabilities](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
 
-Each device processes its assigned rows in table order, and different devices can run concurrently. SP tracks attached to a main output use that output's encoder. VapourSynth processing supplies frames for CPU and GPU encodes.
+Each device processes its assigned rows in table order, and different devices can run concurrently. SP tracks attached to a main output use that output's encoder. The VPy for each row converts output 0 after filtering and hardsubs to that row's bit depth and chroma sampling. VSEdit preview uses the same format.
+
+## CPU encoder command
+
+For either Blu-ray or Remux input, the CPU section generates **Encoder command** from the selected tool, bit depth, and chroma sampling. Choose these settings before editing the command. x264 and x265 offer `yuv420`, `yuv422`, and `yuv444`. The bundled SVT-AV1 uses `yuv420`. The default x264 command applies `--profile high422 --output-csp i422` for 4:2:2 and `--profile high444 --output-csp i444` for 4:4:4.
+
+At launch, a standalone `{params}` expands to the arguments in **Encoder parameters**. Changing the preset or its parameters updates the arguments used by the command. For a fully manual command, enter the arguments directly in **Encoder command**.
+
+Encode captures the visible command at launch and resolves `{X264_PATH}`, `{X265_PATH}`, or `{SVT_AV1_PATH}` to the configured encoder path. You can also enter a program on `PATH` or quote its full path.
+
+The program receives Y4M on standard input at the selected bit depth and sampling. Keep one output placeholder to declare the temporary video format. Use `{output.h264}` for raw H.264, `{output.hevc}` for raw HEVC, or `{output.ivf}` for AV1 in IVF. Process every input frame and write a single video with the selected bit depth and sampling. BluraySubtitle supplies the temporary path for each row and muxes the result with the source timestamps and selected tracks.
+
+With x264, x265, or SVT-AV1, keep `{metadata}` where you want the automatic encoder metadata options inserted. For a different encoder, specify its metadata options in the command as needed.
+
+Select **10-bit** and **yuv420** for these AV1 examples. Edit the parameters to suit the source. [aomenc options](https://aomedia.googlesource.com/aom/+/master/apps/aomenc.c) · [rav1e documentation](https://github.com/xiph/rav1e#compressing-video)
+
+```text
+aomenc --codec=av1 --ivf --passes=1 --cpu-used=6 --end-usage=q --cq-level=25 --bit-depth=10 --input-bit-depth=10 --lag-in-frames=0 -o {output.ivf} -
+rav1e --speed 10 --quantizer 80 -o {output.ivf} -
+```
 
 ## The BluraySubtitle encode pipeline
 
@@ -217,15 +236,15 @@ For Dolby Vision input, x265 10-bit encodes the base layer with profile 8.1 RPU;
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 
-When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count against the VPy output. When x265 advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
+When the actual source exposes HDR10+, x265 10/12-bit encoding with 4:2:0 extracts its validated JSON and checks the metadata frame count against the VPy output. When x265 advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
 
 Dolby Vision uses native x265 RPU input when the executable advertises it and the row already has VBV and mastering-display parameters. Otherwise, or when native verification fails, it uses `dovi_tool` injection without changing rate control.
 
 When both HDR10+ and Dolby Vision are present, x265 writes both in one encode if both native paths qualify. HEVC is checked for both metadata sets after the last injection and before final muxing.
 
-Hardware encoding preserves HDR10+ and Dolby Vision with 10-bit HEVC. It transfers compatible HDR10 mastering-display and light-level metadata to the Matroska track. After encoding, `dovi_tool` and `hdr10plus_tool` inject their respective metadata into temporary HEVC streams. The verified stream replaces the previous stream after checking that existing Dolby Vision metadata was preserved.
+Hardware encoding preserves HDR10+ and Dolby Vision with 10-bit 4:2:0 HEVC. It transfers compatible HDR10 mastering-display and light-level metadata to the Matroska track. After encoding, `dovi_tool` and `hdr10plus_tool` inject their respective metadata into temporary HEVC streams. The verified stream replaces the previous stream after checking that existing Dolby Vision metadata was preserved.
 
-Encode continues with the selected settings when the output cannot preserve all source HDR metadata. For example, 8-bit output omits automatic mastering-display and light-level metadata. The completion report identifies what was omitted. Metadata tool failures also produce a diagnostic report and keep the usable encoded video.
+Encode continues with the selected settings when the output cannot preserve all source HDR metadata. For example, 8-bit output omits automatic mastering-display and light-level metadata. With 4:2:2 or 4:4:4 output, Encode omits automatic Dolby Vision and HDR10+ metadata. The completion report identifies what was omitted. Metadata tool failures also produce a diagnostic report and keep the usable encoded video.
 
 If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source brightness statistics are retained without remeasurement after cropping.
 

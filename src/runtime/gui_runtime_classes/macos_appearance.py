@@ -77,7 +77,11 @@ def set_window_title_font(window: QWidget) -> None:
     info = QFontInfo(window.font())
     family = _string(ns_string, _selector(b"stringWithUTF8String:"), info.family().encode("utf-8"))
     fonts = _objc.objc_getClass(b"NSFont")
-    size = info.pointSizeF()
+    handle = window.windowHandle()
+    # AppKit already scales its points for Retina. Apply only Qt's additional scale.
+    backing_scale = _component(native, _selector(b"backingScaleFactor")) or 1.0
+    scale = handle.devicePixelRatio() / backing_scale
+    size = info.pointSizeF() * scale
     font = _named_font(fonts, _selector(b"fontWithName:size:"), family, size) or _system_font(fonts, _selector(b"systemFontOfSize:"), size)
     _set_object(label, _selector(b"setStringValue:"), text)
     _set_object(label, _selector(b"setFont:"), font)
@@ -85,7 +89,7 @@ def set_window_title_font(window: QWidget) -> None:
     # AppKit places a leading accessory at the top of the title bar. Give the
     # accessory the native frame height and center the text field inside it.
     text_size = _fitting_size(label, _selector(b"fittingSize"))
-    height = max(text_size.height, window.windowHandle().frameMargins().top())
+    height = max(text_size.height, handle.frameMargins().top() * scale)
     _set_size(container, _selector(b"setFrameSize:"), _Size(text_size.width, height))
     _set_origin(label, _selector(b"setFrameOrigin:"), _Point(0, (height - text_size.height) / 2))
 

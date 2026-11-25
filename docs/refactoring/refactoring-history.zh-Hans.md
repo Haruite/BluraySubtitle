@@ -1466,3 +1466,19 @@ CPU 和 GPU 设置均提供可复制的参数预览及自定义预设编辑器�
 Windows 上的 RTX 5070 验证了 CPU 与 NVENC 同批压制、H.264／HEVC／AV1 的 8 位和 10 位组合，以及 10 位 NVENC HEVC 保留三种 HDR 元数据。
 测试的 Profile 7 素材经 x265 和 NVENC 压制后得到 Profile 8 输出，时间戳一致。Vulkan FFV1 在三种位深下均保留了解码像素和时间戳。软件生成的 ProRes 样本经 MKVToolNix 混流后保留时间戳。
 Windows ARM64 能力查询工具通过交叉编译，Qt 离屏检查验证了两种来源和预设持久化。原生 ARM64、Quick Sync、AMF 和 VideoToolbox 仍待实机验证。
+
+## 可编辑的 CPU 压制命令
+
+2026-11-25 · 基于 `a713585`
+
+CPU 压制共用默认命令生成逻辑，并在任务开始时捕获界面中的命令。输出占位符使 aomenc、rav1e 等兼容编码器可使用同一套 Y4M 供帧和按来源时间戳混流的流程。内置编码器使用单独的占位符填入自动元数据参数。
+Windows 上用 x264、x265、SVT-AV1、aomenc、rav1e 和 NVENC 压制了 VFR 短片，输出格式、帧数及时间戳均通过验证。
+Remux 来源的离屏界面任务按可见命令启动 rav1e，启动后再次编辑命令，当前任务仍完成了压制。
+
+## CPU 与 GPU 压制色度采样
+
+2026-11-25 · 基于 `a713585`
+
+各设备设置同时捕获色度采样和位深。VPy 按条目转换输出，x264 生成相应的 Profile 与色彩空间选项。
+GPU 检测列出驱动能力。界面仅对当前组合试压，FFprobe 校验成品后填充色度采样下拉框。ProRes 的采样格式由预设决定。
+Windows 上验证了动态下拉框、x264 和 x265 的 4:2:2 和 4:4:4，以及 RTX 5070 的 NVENC 和 Vulkan 试压。一次 Remux 来源混合设备任务产出了经校验的 10 位 x264 4:4:4 和 NVENC HEVC 4:2:2 MKV。

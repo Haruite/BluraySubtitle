@@ -58,6 +58,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 - Encode uses all CPU sockets by default. To use a GPU, turn on **Enable GPU encoding** under **Settings → Advanced → Video encoding devices**, select a detected GPU in **Encode**, then assign it to main or SP videos. Videos assigned to different devices can encode concurrently.
 - Source CFR/VFR timing and audio/video synchronization are preserved. VPy processing must preserve frame correspondence; [prefix tests](#how-do-i-run-a-short-encode-test) are also supported.
 - Built-in presets are read-only. Manage user presets under **Advanced** or edit encoder parameters directly.
+- For CPU encoding, edit **Encoder command** to use another encoder such as aomenc or rav1e. [Command examples](docs/wiki/Video-Encoding-and-VapourSynth.md#cpu-encoder-command)
 - Each main/SP row can specify a VPy and per-track FLAC/AAC/Opus conversion. Subtitle modes are external, softsub, and hardsub; Remux sources also support chapter/attachment editing.
 - Subtitles from the selected folder fill the main-feature rows in their current order. Check the mapping before encoding.
 - The generated VPy provides denoise, dehalo, dering, deband, and anti-aliasing strength controls.

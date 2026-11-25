@@ -10,7 +10,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 
 from src.core.version import APP_TITLE, current_commit
-from src.core.app_config import macos_application_bundle
+from src.core.app_config import macos_application_bundle, read_ui_scale_percent
 from src.core.i18n import translate_text
 from src.exports.utils import print_terminal_line
 
@@ -20,6 +20,32 @@ from .gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 from .gui_runtime_classes.widget_animations import AnimatedMessageBox, enable_combo_animation
 from .gui_runtime_classes.x11_window import set_x11_window_identity
 from .instance_activation import InstanceActivation
+
+
+RESTART_FOR_UI_SCALE = 75
+
+
+def _create_application() -> QApplication:
+    scale_percent = 0
+    with suppress(OSError, ValueError):
+        # The main window still reports configuration errors through its regular loader.
+        scale_percent = read_ui_scale_percent()
+    if not scale_percent:
+        return QApplication(sys.argv)
+
+    previous_scale = os.environ.get("QT_SCALE_FACTOR")
+    os.environ["QT_SCALE_FACTOR"] = str(scale_percent / 100)
+    try:
+        app = QApplication(sys.argv)
+    finally:
+        # Keep the override local to this Qt session, including when returning to system scaling.
+        if previous_scale is None:
+            os.environ.pop("QT_SCALE_FACTOR", None)
+        else:
+            os.environ["QT_SCALE_FACTOR"] = previous_scale
+    app.setProperty("uiScalePercent", scale_percent)
+    return app
+
 
 def _macos_menu_bar(window: BluraySubtitleGUI):
     from PyQt6.QtGui import QAction
@@ -47,7 +73,7 @@ def _macos_menu_bar(window: BluraySubtitleGUI):
     return bar
 
 
-def run_src_entry(application_log: ApplicationLog | None = None) -> None:
+def run_src_entry(application_log: ApplicationLog | None = None) -> int:
     frozen = getattr(sys, "frozen", False)
     if sys.platform == "win32" and not frozen:
         import ctypes
@@ -64,7 +90,7 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
     )
     if desktop_entry:
         QApplication.setDesktopFileName(desktop_id)
-    app = QApplication.instance() or QApplication(sys.argv)
+    app = QApplication.instance() or _create_application()
     if not desktop_id and supports_desktop_entries():
         desktop_id = desktop_entry_id()
     ready_file = update_error = ""
@@ -78,15 +104,15 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
         update_error = os.environ.pop("BLURAY_SUBTITLE_UPDATE_ERROR", "")
         if not (ready_file or update_error) and update_guard():
             QMessageBox.warning(None, APP_TITLE, translate_text("An update is already running for this installation."))
-            return
+            return 0
     instance = None
     try:
         instance = InstanceActivation(app)
         if not instance.claim():
-            return
+            return 0
     except TimeoutError as error:
         QMessageBox.warning(None, APP_TITLE, str(error))
-        return
+        return 0
     except OSError as error:
         instance = None
         print_terminal_line(
@@ -134,7 +160,9 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
         pass
     try:
         def fit_window_to_available_screen():
-            if bool(getattr(window, '_window_geometry_restored', False)):
+            restored = window._window_geometry_restored
+            scaled = bool(app.property("uiScalePercent"))
+            if (restored and not scaled) or window.isMaximized() or window.isFullScreen():
                 return
             screen = window.screen() or app.primaryScreen()
             if not screen:
@@ -148,24 +176,32 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
                            style.pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight) + border)
             chrome_w = max(fg.width() - window.width(), border)
 
-            # Keep previous small-screen fitting behavior.
-            if avail.height() <= 1200:
-                target_w = max(200, min(window.width(), max(200, avail.width() - chrome_w)))
-                target_h = max(200, avail.height() - chrome_h)
+            max_width = max(200, avail.width() - chrome_w)
+            max_height = max(200, avail.height() - chrome_h)
+            if scaled:
+                window.setMinimumSize(min(window.minimumWidth(), max_width), min(window.minimumHeight(), max_height))
+            if scaled or avail.height() <= 1200:
+                target_w = min(window.width(), max_width)
+                target_h = max_height if not restored and avail.height() <= 1200 else min(window.height(), max_height)
                 window.resize(target_w, target_h)
 
             frame_w = window.width() + chrome_w
             frame_h = window.height() + chrome_h
-            x = avail.left() + max(0, (avail.width() - frame_w) // 2)
-            y = avail.top() + max(0, (avail.height() - frame_h) // 2)
+            if restored:
+                x = max(avail.left(), min(fg.left(), avail.right() - frame_w + 1))
+                y = max(avail.top(), min(fg.top(), avail.bottom() - frame_h + 1))
+            else:
+                x = avail.left() + max(0, (avail.width() - frame_w) // 2)
+                y = avail.top() + max(0, (avail.height() - frame_h) // 2)
             window.move(x, y)
 
         QTimer.singleShot(0, fit_window_to_available_screen)
     except Exception:
         pass
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    return RESTART_FOR_UI_SCALE if window._restart_for_ui_scale else exit_code
 
 
 def main() -> None:
-    run_src_entry()
+    sys.exit(run_src_entry())
 

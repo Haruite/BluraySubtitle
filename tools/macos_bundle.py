@@ -251,26 +251,33 @@ def assemble(ctx, root):
         copy(ctx.prefix / "bin" / name, root / "bin" / name)
     if (ctx.prefix / "bin/locale").is_dir():
         shutil.copytree(ctx.prefix / "bin/locale", root / "bin/locale")
-    pipe = root / "bin/vspipe"
-    pipe.write_text(f"""#!/bin/sh
+    # Desktop setup can expose these launchers through symlinks in user-selected directories.
+    launcher_header = """#!/bin/sh
 set -eu
-base=$(cd "$(dirname "$0")/.." && pwd)
-export PYTHONDONTWRITEBYTECODE=1
+program=$0
+while [ -L "$program" ]; do
+    link=$(/usr/bin/readlink "$program")
+    case "$link" in
+        /*) program=$link ;;
+        *) program=$(dirname "$program")/$link ;;
+    esac
+done
+base=$(cd "$(dirname "$program")/.." && pwd -P)
+"""
+    pipe = root / "bin/vspipe"
+    pipe.write_text(launcher_header + f"""export PYTHONDONTWRITEBYTECODE=1
 export VAPOURSYNTH_EXTRA_PLUGIN_PATH="${{VAPOURSYNTH_EXTRA_PLUGIN_PATH:-$base/plugins}}"
 export VK_DRIVER_FILES="${{VK_DRIVER_FILES:-$base/share/vulkan/icd.d/MoltenVK_icd.json}}"
 exec "$base/{SITE.as_posix()}/vapoursynth/vspipe" "$@"
-""")
+""", encoding="utf-8", newline="\n")
     pipe.chmod(0o755)
     editor = root / "bin/vsedit"
-    editor.write_text(f"""#!/bin/sh
-set -eu
-base=$(cd "$(dirname "$0")/.." && pwd)
-export PYTHONDONTWRITEBYTECODE=1
+    editor.write_text(launcher_header + f"""export PYTHONDONTWRITEBYTECODE=1
 export QT_PLUGIN_PATH="$base/qt/6.6/PyQt6/Qt6/plugins"
 export VSSCRIPT_PATH="$base/{SITE.as_posix()}/vapoursynth/libvsscript.dylib"
 export VAPOURSYNTH_EXTRA_PLUGIN_PATH="${{VAPOURSYNTH_EXTRA_PLUGIN_PATH:-$base/plugins}}"
 exec "$base/libexec/vsedit" "$@"
-""")
+""", encoding="utf-8", newline="\n")
     editor.chmod(0o755)
     copy(ctx.prefix / "share/BluraySubtitle.icns", root / "share/BluraySubtitle.icns")
     latest = relocation(ctx, root)

@@ -1469,3 +1469,19 @@ Hardware HEVC retains compatible static HDR and uses verified post-encode inject
 On Windows with an RTX 5070, tests covered CPU and NVENC in one batch, 8- and 10-bit H.264, HEVC, and AV1, and 10-bit NVENC HEVC retaining all three HDR metadata types.
 x265 and NVENC encoded the tested Profile 7 samples as Profile 8 with matching timestamps. Vulkan FFV1 preserved decoded pixels and timestamps at all three depths. Software-generated ProRes samples preserved timestamps through MKVToolNix.
 The Windows ARM64 query tool cross-compiled, and offscreen Qt checks covered both source modes and preset persistence. Native ARM64, Quick Sync, AMF, and VideoToolbox runtime checks remain pending.
+
+## Editable CPU encoder commands
+
+2026-11-25 · Based on `a713585`
+
+CPU Encode uses a shared command builder for the visible defaults and captures the editable command when the task starts. The output placeholder lets aomenc, rav1e, and compatible encoders share the Y4M and timestamp-based muxing workflow. Built-in commands use a separate placeholder for automatic metadata options.
+Windows tests encoded a short VFR source with x264, x265, SVT-AV1, aomenc, rav1e, and NVENC, verifying the output formats, frame counts, and timestamps.
+An offscreen Remux-source task launched rav1e from the visible command and completed after the command field was edited again.
+
+## Chroma sampling for CPU and GPU Encode
+
+2026-11-25 · Based on `a713585`
+
+Per-device settings capture chroma sampling with bit depth. A managed VPy conversion applies the row's output format, and x264 generates matching profile and color-space options.
+GPU discovery lists driver capabilities. Short encodes of the current selection populate the chroma dropdown after FFprobe verifies the actual output. ProRes sampling follows its preset.
+Windows checks covered the dynamic selector, x264 and x265 4:2:2 and 4:4:4, and RTX 5070 NVENC and Vulkan trials. A mixed-device Remux-source task produced verified 10-bit x264 4:4:4 and NVENC HEVC 4:2:2 MKVs.

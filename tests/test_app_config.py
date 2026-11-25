@@ -18,6 +18,7 @@ from src.core.app_config import (
     app_config_from_mapping,
     default_app_config,
     load_app_config,
+    read_ui_scale_percent,
     save_app_config,
 )
 from src.core.encode_presets import UserGpuEncodePreset
@@ -25,6 +26,18 @@ from src.core.tool_paths import TOOL_PATH_NAMES, require_tool_path, resolve_tool
 
 
 class AppConfigTests(unittest.TestCase):
+    def test_ui_scale_is_read_before_tool_migration(self) -> None:
+        self.assertEqual(app_config_from_mapping({}).ui.scale_percent, 0)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "config.json"
+            original = b'{"ui": {"scale_percent": 150}}'
+            target.write_bytes(original)
+            self.assertEqual(read_ui_scale_percent(target), 150)
+            self.assertEqual(target.read_bytes(), original)
+
+        with self.assertRaisesRegex(ValueError, "Unsupported UI scale"):
+            app_config_from_mapping({"ui": {"scale_percent": 60}})
+
     def test_gpu_encoding_requires_explicit_opt_in(self) -> None:
         self.assertFalse(app_config_from_mapping({"encode": {"cpu_enabled": False}}).encode.gpu_enabled)
         self.assertTrue(app_config_from_mapping({"encode": {"gpu_enabled": True}}).encode.gpu_enabled)
@@ -36,7 +49,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(legacy, GpuEncodePreferences("nvenc:0", True, parameters="-cq 20"))
 
         devices = (
-            replace(legacy, preset="Film", parameters=None, custom_presets=(
+            replace(legacy, preset="Film", parameters=None, chroma_format="yuv444", custom_presets=(
                 UserGpuEncodePreset("hevc", "Film", "-cq 18", "10"),
                 UserGpuEncodePreset("hevc", "Film", "-cq 21", "8"),
                 UserGpuEncodePreset("av1", "Film", "-cq 24", "10"),
@@ -46,11 +59,11 @@ class AppConfigTests(unittest.TestCase):
             )),
         )
         config = default_app_config()
-        config = replace(config, encode=replace(config.encode, gpu_devices=devices))
+        config = replace(config, encode=replace(config.encode, gpu_devices=devices, chroma_format="yuv422"))
         with tempfile.TemporaryDirectory() as temporary_directory:
             target = Path(temporary_directory) / "config.json"
             save_app_config(config, target)
-            self.assertEqual(load_app_config(target).encode.gpu_devices, devices)
+            self.assertEqual(load_app_config(target).encode, config.encode)
 
     def test_missing_config_is_created_from_packaged_template(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -59,7 +72,7 @@ class AppConfigTests(unittest.TestCase):
             template = root / "config.default.json"
             expected = replace(
                 default_app_config(),
-                ui=UiPreferences(language="zh", theme="dark", font_size=12, opacity=88),
+                ui=UiPreferences(language="zh", theme="dark", font_size=12, scale_percent=125, opacity=88),
                 paths=PathPreferences(remux_output="R:/Remux", encode_output="E:/Encode"),
             )
             save_app_config(expected, template)

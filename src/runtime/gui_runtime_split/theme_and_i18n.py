@@ -217,6 +217,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     encode_box = 'QGroupBox#encodeBox'
     command_edit = 'QPlainTextEdit#discCommandEdit'
     encode_params = 'QPlainTextEdit#encodeParametersEdit'
+    encode_command = 'QPlainTextEdit#encodeCommandEdit'
     tab_bar = 'QTabBar#functionTabbar,QDialog QTabBar'
     tab = 'QTabBar#functionTabbar::tab,QDialog QTabBar::tab'
     toggle = 'QTableWidget QToolButton[checkable="true"]'
@@ -261,6 +262,8 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{{border-color:{control_edge};}}'
         'QLineEdit:enabled:focus:!read-only,QAbstractSpinBox:enabled:focus:!read-only'
         f'{{border-bottom-color:{focus};}}',
+        # The Windows 11 style can inset cell contents without including that space in the size hint.
+        'QTableWidget::item{padding:0;}',
         _table_stylesheet(('QTableWidget',), *table_colors, table_selection, text),
         f'{section},{subtitle_box},QDialog QGroupBox{{border:1px solid {edge};border-radius:8px;}}'
         f'QGroupBox#encodeDeviceBox{{margin-top:0;border:1px solid {edge};border-radius:6px;background:transparent;}}'
@@ -282,16 +285,16 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{toggle}:checked:hover{{background:{checked_hover};}}'
         f'{toggle}:disabled{{background:{alternate};border-color:{edge};}}'
         f'{toggle}:checked:disabled{{background:{checked_disabled};}}'
-        f'{command_edit},{encode_params},QDialog QPlainTextEdit{{color:{text};'
+        f'{command_edit},{encode_params},{encode_command},QDialog QPlainTextEdit{{color:{text};'
         f'border:1px solid {edge};border-radius:5px;padding:3px;}}'
-        f'{command_edit},{encode_params}{{background:{tinted_editor_background};border-color:{table_colors[3]};}}'
-        f'{command_edit}:enabled,{encode_params}:enabled{{border-color:{control_edge};}}'
-        f'{command_edit}:disabled,{encode_params}:disabled'
+        f'{command_edit},{encode_params},{encode_command}{{background:{tinted_editor_background};border-color:{table_colors[3]};}}'
+        f'{command_edit}:enabled,{encode_params}:enabled,{encode_command}:enabled{{border-color:{control_edge};}}'
+        f'{command_edit}:disabled,{encode_params}:disabled,{encode_command}:disabled'
         f'{{background:{tinted_editor_disabled_background};color:{muted_text};}}'
         f'QDialog QPlainTextEdit{{background:{editor};}}'
         f'QPlainTextEdit#externalToolsEditor{{background:{tinted_editor_background};}}'
         f'QPlainTextEdit#externalToolsDetectionView{{background:{tool_result_background};}}'
-        f'{command_edit}:focus,{encode_params}:focus:!read-only,QDialog QPlainTextEdit:focus:!read-only'
+        f'{command_edit}:focus,{encode_params}:focus:!read-only,{encode_command}:focus,QDialog QPlainTextEdit:focus:!read-only'
         f'{{border-bottom-color:{focus};}}'
         f'QDialog QTabWidget::pane{{background:{pane};border:1px solid {edge};border-radius:6px;}}'
         'QDialog QScrollArea{background:transparent;border:0;}'
@@ -804,6 +807,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 widget.setAccessibleName(self.t('remux cmd'))
             if widget.objectName() == 'encodeParametersEdit':
                 widget.setAccessibleName(self.t('Encoder parameters'))
+            if widget.objectName() == 'encodeCommandEdit':
+                widget.setAccessibleName(self.t('Encoder command'))
             if widget.objectName() == 'mainPlaylistToggle':
                 name = self.t('main')
                 widget.setToolTip(name)
@@ -833,6 +838,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 finally:
                     widget.blockSignals(False)
             if isinstance(widget, QComboBox):
+                placeholder = widget.placeholderText()
+                if placeholder in tooltip_catalog:
+                    widget.setPlaceholderText(self.t(placeholder))
                 if default_label := widget.property('fontDefaultLabel'):
                     widget.setItemText(0, self.t(default_label))
                     continue

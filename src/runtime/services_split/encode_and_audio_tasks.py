@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -22,7 +21,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Optional
 
-from ...core.tool_paths import ENCODER_PATH_NAMES, tool_path
+from ...core.tool_paths import bundle_directory, is_bundled_tool, tool_path
+from ...core.video_format import yuv_format_matches
 from .service_base import BluraySubtitleServiceBase
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.audio_conversion import AudioEncodingSettings, mux_with_audio_conversion
@@ -32,6 +32,7 @@ from src.runtime.dolby_vision import (
     prepare_dolby_vision_encode,
     verify_dolby_vision_rpu,
 )
+from src.runtime.encode_command import CpuEncodeCommand, default_cpu_encode_command, format_encoder_command
 from src.runtime.encode_source import (
     SourceColorMetadata,
     VapourSynthOutputMetadataMismatch,
@@ -51,7 +52,8 @@ from src.runtime.encode_source import (
 )
 from src.runtime.encode_results import EncodeTaskFailure
 from src.runtime.hardware_encode import (
-    GPU_MUXERS, GPU_OUTPUT_DEPTHS, GpuEncodeDevice, VideoEncodeChoice, hardware_encode_command,
+    GPU_MUXERS, GpuEncodeDevice, VideoEncodeChoice, hardware_encode_command,
+    hardware_encoder_parameters,
 )
 from src.runtime.frame_check import run_full_frame_check
 from src.runtime.video_timeline import (
@@ -64,6 +66,7 @@ from src.runtime.video_crop import (
     detect_black_borders,
     write_vapoursynth_crop,
 )
+from src.runtime.vpy_output import vpy_with_output_format
 from src.runtime import TaskCancelled, worker_process_context
 from ...core.i18n import translate_text
 from ...exports.utils import (
@@ -75,6 +78,7 @@ from ...exports.utils import (
     force_remove_file,
     get_time_str,
     print_terminal_line,
+    system_tool_environment,
 )
 from ...vs_tools.getnative import format_getnative_progress, getnative as auto_getnative
 
@@ -108,43 +112,6 @@ def _remove_managed_lwlibav_cache(source_path: str) -> None:
     for path in (cache_path, cache_path + '.lock'):
         if os.path.isfile(path):
             force_remove_file(path)
-
-
-def _normalize_x264_extra_for_bit_depth(extra: list[str], bd: str) -> list[str]:
-    """Map x264 --profile to output depth: 8-bit → high, 10-bit → high10 (see x264 --output-depth)."""
-    out = list(extra)
-    b = str(bd or "").strip()
-    if b not in ("8", "10"):
-        return out
-    want = "high10" if b == "10" else "high"
-
-    i = 0
-    found_profile = False
-    while i < len(out):
-        tok = out[i]
-        if tok == "--profile" and i + 1 < len(out):
-            found_profile = True
-            pv = out[i + 1]
-            if pv == "high" and want == "high10":
-                out[i + 1] = "high10"
-            elif pv == "high10" and want == "high":
-                out[i + 1] = "high"
-            i += 2
-            continue
-        if isinstance(tok, str) and tok.startswith("--profile="):
-            found_profile = True
-            key, _, val = tok.partition("=")
-            if val == "high" and want == "high10":
-                out[i] = f"{key}=high10"
-            elif val == "high10" and want == "high":
-                out[i] = f"{key}=high"
-            i += 1
-            continue
-        i += 1
-
-    if not found_profile and b == "10":
-        out = ["--profile", "high10"] + out
-    return out
 
 
 def _emit_encode_log_line(message: str, *, translate: bool = True) -> None:
@@ -231,10 +198,12 @@ def _record_encode_warning(service, message: str) -> None:
     service._progress(text=message)
 
 
-def _warn_unsupported_hdr_mode(service, feature: str, encoder: str, depth: str, path: str) -> None:
+def _warn_unsupported_hdr_mode(
+        service, feature: str, encoder: str, depth: str, path: str, chroma_format: str = 'yuv420',
+) -> None:
     _record_encode_warning(service, translate_text(
-        '{feature} cannot be preserved with {encoder} at {depth}-bit. Encoding will continue: {path}'
-    ).format(feature=feature, encoder=encoder, depth=depth, path=path))
+        '{feature} cannot be preserved with {encoder} at {depth}-bit {chroma}. Encoding will continue: {path}'
+    ).format(feature=feature, encoder=encoder, depth=depth, chroma=chroma_format, path=path))
 
 
 def _record_nonblocking_hdr_automation_failure(
@@ -275,14 +244,15 @@ def _plan_automatic_encoder_metadata(
         encoder: str,
         encoder_executable: str,
         bit_depth: str,
-        encoder_parameters: str,
+        manual_arguments: tuple[str, ...],
         hdr10plus_json_path: str,
         dolby_vision_rpu_path: str,
         progress_name: str = '',
         *,
         hardware: bool = False,
+        add_encoder_metadata: bool = True,
+        chroma_format: str = 'yuv420',
 ) -> tuple[
-    list[str],
     tuple[str, ...],
     bool,
     bool,
@@ -296,13 +266,7 @@ def _plan_automatic_encoder_metadata(
         progress_name
         or os.path.splitext(os.path.basename(output_file))[0]
     ).strip()
-    try:
-        manual_arguments = shlex.split(
-            encoder_parameters,
-            posix=sys.platform != 'win32',
-        )
-    except ValueError:
-        manual_arguments = encoder_parameters.split()
+    encoder_name = encoder if add_encoder_metadata else os.path.basename(encoder_executable)
     automatic_arguments: tuple[str, ...] = ()
     vpy_color_changed = False
     vpy_timeline = None
@@ -323,7 +287,6 @@ def _plan_automatic_encoder_metadata(
             error,
         )
         return (
-            manual_arguments,
             automatic_arguments,
             vpy_color_changed,
             False,
@@ -382,10 +345,12 @@ def _plan_automatic_encoder_metadata(
         'Planning automatic encoder metadata parameters: {name}'
     ).format(name=progress_name))
     include_static_hdr = bit_depth != '8'
+    if chroma_format != 'yuv420':
+        actual_source = replace(actual_source, stream={**actual_source.stream, 'chroma_location': None})
     final_metadata = parse_source_color_metadata(actual_source)
     if not include_static_hdr:
         if source_is_hdr or final_metadata.color_transfer in ('smpte2084', 'arib-std-b67'):
-            _warn_unsupported_hdr_mode(service, 'HDR', encoder, bit_depth, output_file)
+            _warn_unsupported_hdr_mode(service, 'HDR', encoder_name, bit_depth, output_file, chroma_format)
         final_metadata = replace(
             final_metadata, mastering_display_x26x=None, mastering_display_svt=None, content_light_level=None,
         )
@@ -395,12 +360,13 @@ def _plan_automatic_encoder_metadata(
             'color primaries or transfer characteristics: {path}'
         ).format(path=output_file))
     try:
-        automatic_arguments = build_automatic_encoder_metadata_arguments(
-            actual_source,
-            'x265' if hardware else encoder,
-            manual_arguments,
-            include_static_hdr=include_static_hdr,
-        )
+        if add_encoder_metadata:
+            automatic_arguments = build_automatic_encoder_metadata_arguments(
+                actual_source,
+                'x265' if hardware else encoder,
+                manual_arguments,
+                include_static_hdr=include_static_hdr,
+            )
         if hardware and encoder == 'av1':
             # AV1 signals only left and top-left positions for 4:2:0.
             automatic_arguments = tuple(
@@ -418,12 +384,13 @@ def _plan_automatic_encoder_metadata(
             'encoding will continue: {path}. Error report: {report}',
             error,
         )
-    hdr10plus_supported = (encoder == 'hevc' and bit_depth == '10') if hardware else (
-        encoder == 'x265' and bit_depth in ('10', '12')
+    hdr10plus_supported = chroma_format == 'yuv420' and (
+        (encoder == 'hevc' and bit_depth == '10') if hardware else
+        (encoder == 'x265' and bit_depth in ('10', '12'))
     )
     x265_dynamic_options = (
         probe_x265_dynamic_metadata_options(encoder_executable)
-        if encoder == 'x265' and not vpy_color_changed and (
+        if add_encoder_metadata and encoder == 'x265' and not vpy_color_changed and (
             (hdr10plus_present and hdr10plus_supported) or dolby_vision_rpu_path
         )
         else frozenset()
@@ -434,7 +401,7 @@ def _plan_automatic_encoder_metadata(
             and not arguments_contain_option(manual_arguments, '--dhdr10-info')
     ):
         if not hdr10plus_supported:
-            _warn_unsupported_hdr_mode(service, 'HDR10+', encoder, bit_depth, output_file)
+            _warn_unsupported_hdr_mode(service, 'HDR10+', encoder_name, bit_depth, output_file, chroma_format)
         elif vpy_color_changed:
             _record_encode_warning(service, translate_text(
                 'HDR10+ metadata will not be retained because the VapourSynth output changed '
@@ -511,7 +478,6 @@ def _plan_automatic_encoder_metadata(
         _emit_encode_log_line(f'[encode-source] {metadata_message}', translate=False)
         service._progress(text=metadata_message)
     return (
-        manual_arguments,
         automatic_arguments,
         vpy_color_changed,
         hdr10plus_metadata_prepared,
@@ -520,30 +486,6 @@ def _plan_automatic_encoder_metadata(
         vpy_timeline[0] if vpy_timeline is not None else None,
         source_frame_count,
     )
-
-
-def _format_encoder_cmd_for_echo(enc_cmd: list) -> str:
-    """Shell-style echo string; always quote paths after ``-o`` / ``-b``."""
-    parts: list[str] = []
-    i = 0
-    if enc_cmd:
-        exe = str(enc_cmd[0])
-        parts.append(f'"{exe}"' if (' ' in exe or ';' in exe) else exe)
-        i = 1
-    while i < len(enc_cmd):
-        tok = str(enc_cmd[i])
-        if tok in ('-o', '-b') and i + 1 < len(enc_cmd):
-            parts.append(tok)
-            parts.append(f'"{enc_cmd[i + 1]}"')
-            i += 2
-            continue
-        if ' ' in tok or ';' in tok:
-            parts.append(f'"{tok}"')
-        else:
-            parts.append(tok)
-        i += 1
-    return ' '.join(parts)
-
 
 
 def _pump_subprocess_stderr_raw(stream) -> None:
@@ -597,7 +539,7 @@ def _run_vspipe_piped_encode(
     env: Optional[dict],
 ) -> int:
     """
-    vspipe --container y4m | encoder (x264 / x265 / SvtAv1EncApp) without cmd.exe.
+    Pipe VapourSynth Y4M into one encoder process.
     In a real TTY, inherit the encoder stderr so x265 can use \\r line progress; otherwise pipe and
     forward stderr bytes unchanged (same as x264/SVT) so logs match the encoder's native output.
     """
@@ -636,12 +578,15 @@ def _run_vspipe_piped_encode(
         **popen_kw,
     )
     try:
+        external_tool = bool(bundle_directory() and not is_bundled_tool(enc_cmd[0]))
         p_e = run_command(
             enc_cmd,
             wait=False,
             stdin=p_v.stdout,
             stdout=subprocess.DEVNULL,
             stderr=stderr_e,
+            env=system_tool_environment() if external_tool else None,
+            system_dll_search=external_tool and sys.platform == 'win32',
             **popen_kw,
         )
     except Exception:
@@ -1423,6 +1368,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             video_progress_name: str = '',
             cancel_event: Optional[threading.Event] = None,
             hardware_device: GpuEncodeDevice | None = None,
+            cpu_command: CpuEncodeCommand | None = None,
+            chroma_format: str = 'yuv420',
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1435,13 +1382,24 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         output_folder = os.path.dirname(os.path.abspath(output_file))
         bd = bit_depth
         bits_int = int(bd)
+        command = None
+        hardware_choice = None
+        if hardware_device is None:
+            command = cpu_command or default_cpu_encode_command(
+                encoder, bd, encoder_parameters, chroma_format=chroma_format,
+            )
+            encoder = command.encoder
+        else:
+            hardware_choice = VideoEncodeChoice(encoder, bd, encoder_parameters, hardware_device, chroma_format)
+            chroma_format = hardware_choice.output_chroma_format
+        manual_arguments = command.arguments[1:] if command is not None else tuple(
+            hardware_encoder_parameters(encoder_parameters)
+        )
+        enc_exe = command.arguments[0] if command is not None else tool_path('FFMPEG_PATH')
         output_stem = os.path.splitext(os.path.basename(output_file))[0]
         progress_name = str(progress_name or output_stem).strip()
         video_progress_name = str(video_progress_name or progress_name).strip()
-        encoded_extension = {
-            'x264': '.h264',
-            'x265': '.hevc',
-            'svtav1': '.ivf',
+        encoded_extension = command.output_extension if command is not None else {
             'h264': '.h264',
             'hevc': '.hevc',
             'av1': '.ivf',
@@ -1489,13 +1447,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     str(error),
                 ) from error
             if crop_plan.has_crop:
-                try:
-                    manual_arguments = shlex.split(
-                        encoder_parameters,
-                        posix=sys.platform != 'win32',
-                    )
-                except ValueError:
-                    manual_arguments = encoder_parameters.split()
                 if arguments_contain_option(
                         manual_arguments,
                         '--dolby-vision-rpu',
@@ -1533,8 +1484,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
             dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
             if dv_tid is not None:
-                if encoder not in ('x265', 'hevc') or bd != '10':
-                    _warn_unsupported_hdr_mode(self, 'Dolby Vision', encoder, bd, output_file)
+                if encoder not in ('x265', 'hevc') or bd != '10' or chroma_format != 'yuv420':
+                    name = os.path.basename(enc_exe) if cpu_command is not None else encoder
+                    _warn_unsupported_hdr_mode(self, 'Dolby Vision', name, bd, output_file, chroma_format)
                 else:
                     self._progress(text=translate_text(
                         'Dolby Vision: preparing {name}'
@@ -1791,6 +1743,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 vpy_path,
                 crop_plan if auto_crop_black_borders else None,
             )
+            script = Path(vpy_path)
+            script.write_text(
+                vpy_with_output_format(script.read_text(encoding='utf-8'), bd, chroma_format),
+                encoding='utf-8', newline='\r\n',
+            )
 
             vspipe_exe = tool_path("VSPIPE_PATH")
             vspipe_env = get_vspipe_environment(vspipe_exe, tool_path("PLUGIN_PATH"))
@@ -1798,14 +1755,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             # Metadata probing does not render final subtitles and needs no timecodes.
             vspipe_env.pop('BLURAYSUB_VPY_TIMECODES', None)
             vspipe_env.pop('BLURAYSUB_VPY_FRAMES', None)
-            enc_exe = tool_path('FFMPEG_PATH' if hardware_device else ENCODER_PATH_NAMES[encoder])
 
             failure_stage = 'Actual encode source and metadata planning'
             self._progress(text=translate_text(
                 'Analyzing video source metadata: {name}'
             ).format(name=progress_name))
             (
-                manual_encoder_arguments,
                 automatic_metadata_arguments,
                 vpy_color_changed,
                 hdr10plus_metadata_active,
@@ -1823,11 +1778,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 encoder,
                 enc_exe,
                 bd,
-                encoder_parameters,
+                manual_arguments,
                 hdr10plus_json_path,
                 encode_dovi_plan.rpu_path if encode_dovi_plan else '',
                 progress_name,
                 hardware=hardware_device is not None,
+                add_encoder_metadata=command is None or command.uses_metadata,
+                chroma_format=chroma_format,
             )
             failure_stage = 'Video timestamp preparation'
             if expected_output_frames is None:
@@ -1875,45 +1832,22 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     'characteristics: {path}'
                 ).format(path=output_file))
 
-            extra = list(manual_encoder_arguments) + list(
-                automatic_metadata_arguments
-            )
-            if encoder == 'x264':
-                extra = _normalize_x264_extra_for_bit_depth(extra, bd)
-            elif encoder == 'svtav1' and bd == '12' and not any(
-                    str(arg).strip().lower() in ('--profile', '-profile')
-                    or str(arg).strip().lower().startswith(('--profile=', '-profile='))
-                    for arg in extra
-            ):
-                extra = ['--profile', '2'] + list(extra)
-
-            if hardware_device:
+            if command is not None:
+                enc_cmd = command.materialize(encoded_path, automatic_metadata_arguments)
+            else:
                 enc_cmd = hardware_encode_command(
-                    enc_exe, VideoEncodeChoice(encoder, bd, encoder_parameters, hardware_device),
+                    enc_exe, hardware_choice,
                     ['-f', 'yuv4mpegpipe', '-i', 'pipe:0'],
                     ['-f', GPU_MUXERS[encoder], encoded_path],
                     metadata_args=automatic_metadata_arguments,
                 )
-            elif encoder == 'x264':
-                enc_cmd = [enc_exe, '--demuxer', 'y4m', '-'] + extra + ['--output-depth', bd, '-o', encoded_path]
-            elif encoder == 'x265':
-                # Stdin is already '--y4m' '-' ; a trailing '-' is parsed as a second input (unused) and can abort x265.
-                enc_cmd = (
-                    [enc_exe]
-                    + extra
-                    + ['--y4m', '-', '--input-depth', bd, '--output-depth', bd, '-o', encoded_path]
-                )
-            else:
-                # Windows: SVT-AV1 hand-tuned asm can corrupt output (upstream unfixed); force portable C paths.
-                if sys.platform == "win32":
-                    enc_cmd = [enc_exe, "--asm", "c", "-i", "stdin", "--input-depth", bd] + extra + ["-b", encoded_path]
-                else:
-                    enc_cmd = [enc_exe, "-i", "stdin", "--input-depth", bd] + extra + ["-b", encoded_path]
-
             use_svt_win_temp_y4m = (
-                encoder == "svtav1"
-                and sys.platform == "win32"
+                sys.platform == "win32"
                 and str(os.environ.get("BLURAYSUB_SVT_WIN_TEMP_Y4M", "") or "").strip() == "1"
+                and command is not None and encoder == 'svtav1'
+                and command.uses_builtin_encoder()
+                and any(option in ('-i', '--input') and value == 'stdin'
+                        for option, value in zip(enc_cmd, enc_cmd[1:]))
             )
             if use_svt_win_temp_y4m:
                 cmd_echo = (
@@ -1926,7 +1860,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 except Exception:
                     pass
             else:
-                cmd_echo = f'"{vspipe_exe}" --container y4m "{vpy_path}" - | {_format_encoder_cmd_for_echo(enc_cmd)}'
+                cmd_echo = f'"{vspipe_exe}" --container y4m "{vpy_path}" - | {format_encoder_command(enc_cmd)}'
             print(f'{translate_text("Encode command:")}{cmd_echo}')
             failure_stage = 'Video encoding'
             self._progress(text=translate_text(
@@ -1969,10 +1903,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if hardware_device:
                 actual_video = probe_actual_encode_source(encoded_path)
                 pixels = actual_video.stream.get('pix_fmt')
-                if actual_video.codec_name != encoder or GPU_OUTPUT_DEPTHS.get(pixels) != bd:
+                if actual_video.codec_name != encoder or not yuv_format_matches(pixels, chroma_format, bd):
                     raise RuntimeError(translate_text(
-                        'Hardware encoder did not produce the selected codec and bit depth: {path}'
+                        'Hardware encoder did not produce the selected codec, bit depth and chroma sampling: {path}'
                     ).format(path=encoded_path))
+            elif cpu_command is not None or chroma_format != 'yuv420':
+                command.verify_output(encoded_path, bd, chroma_format)
             if encode_dovi_plan and dolby_vision_metadata_active:
                 dolby_vision_verified = False
                 if native_dolby_vision:

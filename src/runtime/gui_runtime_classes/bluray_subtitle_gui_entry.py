@@ -32,6 +32,7 @@ from .window_background import background_panel_colors
 _BACKGROUND_CONTENT_STYLE = (
     'QWidget#mainToolbar QLabel,'
     'QScrollArea#contentScroll,QScrollArea#contentScroll .QWidget,'
+    'QScrollArea#toolbarPreferencesScroll,QScrollArea#toolbarPreferencesScroll .QWidget,'
     'QWidget#scrollContent QTableWidget,QWidget#scrollContent QLabel,'
     'QWidget#scrollContent QCheckBox,QWidget#scrollContent QRadioButton{background:transparent;}'
 )

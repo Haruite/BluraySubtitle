@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import threading
 from contextvars import copy_context
-from PyQt6.QtCore import QObject, QSignalBlocker, QThread, Qt, pyqtSignal
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout, QWidget
+from PyQt6.QtCore import QObject, QRect, QSize, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QLayout, QPlainTextEdit, QVBoxLayout, QWidget,
+)
 
 from src.core.app_config import EncodePreferences, GpuEncodePreferences
 from src.core.encode_presets import UserGpuEncodePreset
 from src.core.i18n import translate_text
+from src.core.video_format import cpu_chroma_formats
 from src.runtime import TaskCancelled
 from src.runtime.hardware_encode import (
     GPU_CODECS, GpuEncodeDevice, VideoEncodeChoice,
     cpu_device_name, discover_gpu_encoders, gpu_detection_supported, gpu_device_label, gpu_presets,
+    probe_gpu_chroma_formats,
 )
 from .custom_table_widget import StyledComboBox
 from .encode_preset_editor import EncodePresetEditor
@@ -53,6 +57,87 @@ class GpuProbeThread(QThread):
             self.found.emit(devices)
 
 
+class _ChromaProbeThread(QThread):
+    def __init__(self, paths: tuple[str, str], choice: VideoEncodeChoice, parent: QObject):
+        super().__init__(parent)
+        self.paths = paths
+        self.choice = choice
+        self.cancel = threading.Event()
+        self.formats: tuple[str, ...] = ()
+        self.error = ''
+        self._context = copy_context()
+
+    def run(self) -> None:
+        try:
+            self.formats = self._context.run(probe_gpu_chroma_formats, *self.paths, self.choice, self.cancel)
+        except TaskCancelled:
+            return
+        except Exception as error:
+            self.error = str(error)
+
+
+class _DeviceSelectorLayout(QLayout):
+    """Keep each label beside its selector when a narrow window wraps the row."""
+
+    def __init__(self):
+        super().__init__()
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(16)
+
+    def addItem(self, item) -> None:
+        self._items.append(item)
+        self.invalidate()
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if self.itemAt(index) is not None else None
+
+    def minimumSize(self) -> QSize:
+        minimum = QSize(0, 0)
+        for item in self._items:
+            if not item.isEmpty():
+                minimum = minimum.expandedTo(item.minimumSize())
+        return minimum
+
+    def sizeHint(self) -> QSize:
+        sizes = [item.sizeHint() for item in self._items if not item.isEmpty()]
+        width = sum(size.width() for size in sizes) + max(0, len(sizes) - 1) * self.spacing()
+        return QSize(width, max((size.height() for size in sizes), default=0))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._arrange(width)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._arrange(rect.width(), rect)
+
+    def _arrange(self, width: int, rect: QRect | None = None) -> int:
+        x = y = row_height = 0
+        for item in self._items:
+            if item.isEmpty():
+                continue
+            size = item.sizeHint()
+            item_width = min(size.width(), width)
+            if x and x + item_width > width:
+                x = 0
+                y += row_height + 7
+                row_height = 0
+            if rect is not None:
+                item.setGeometry(QRect(rect.x() + x, rect.y() + y, item_width, size.height()))
+            x += item_width + self.spacing()
+            row_height = max(row_height, size.height())
+        return y + row_height
+
+
 class _DeviceBox(QGroupBox):
     def __init__(self, name: str, codec_label: str, translate, parent: QWidget, *, manage_presets: bool):
         super().__init__(parent)
@@ -70,8 +155,7 @@ class _DeviceBox(QGroupBox):
         options.setContentsMargins(0, 0, 0, 0)
         options.setSpacing(7)
 
-        selectors = QHBoxLayout()
-        selectors.setSpacing(18)
+        selectors = _DeviceSelectorLayout()
 
         def add_selector(label: str) -> tuple[QWidget, StyledComboBox]:
             field = QWidget(self.options)
@@ -92,7 +176,12 @@ class _DeviceBox(QGroupBox):
         self.bit_depth_field, self.bit_depth = add_selector('Output bit depth:')
         _, self.preset = add_selector('Preset parameters')
         self.preset.setMaximumWidth(240)
-        selectors.addStretch()
+        self.chroma_field, self.chroma = add_selector('Chroma sampling')
+        self.chroma.setMaximumWidth(130)
+        self.preferred_chroma = 'yuv420'
+        self.chroma_request: tuple[tuple[str, str], VideoEncodeChoice] | None = None
+        self.chroma_pending = False
+        self.chroma_probe: _ChromaProbeThread | None = None
         options.addLayout(selectors)
 
         self.preset_editor: EncodePresetEditor | None = None
@@ -129,6 +218,16 @@ class _DeviceBox(QGroupBox):
         else:
             self.parameters.setPlainText(value)
 
+    def set_chroma_formats(self, formats: tuple[str, ...], selected: str = '', placeholder: str = '') -> None:
+        with QSignalBlocker(self.chroma):
+            self.chroma.clear()
+            self.chroma.setPlaceholderText(placeholder)
+            for chroma_format in formats:
+                self.chroma.addItem(chroma_format, chroma_format)
+            if formats:
+                self.chroma.setCurrentIndex(max(0, self.chroma.findData(selected)))
+        self.chroma.setEnabled(bool(formats))
+
 
 class EncodeDeviceControls(QWidget):
     selection_changed = pyqtSignal()
@@ -143,6 +242,12 @@ class EncodeDeviceControls(QWidget):
         self._controls: dict[str, _DeviceBox] = {}
         self._probe = None
         self._probe_paths = None
+        self._chroma_paths = ('', '')
+        self._chroma_context = copy_context()
+        self._chroma_timer = QTimer(self)
+        self._chroma_timer.setSingleShot(True)
+        self._chroma_timer.setInterval(300)
+        self._chroma_timer.timeout.connect(self._start_chroma_probes)
         self._cpu_enabled = True
         self._gpu_enabled = False
         self._diy = False
@@ -162,13 +267,15 @@ class EncodeDeviceControls(QWidget):
         self._update_selection()
 
     def refresh(self, ffmpeg: str, ffprobe: str, *, detected: tuple[GpuEncodeDevice, ...] | None = None) -> None:
+        self.set_chroma_tool_paths(ffmpeg, ffprobe)
         if not self._gpu_enabled:
             return
         paths = (ffmpeg, ffprobe)
         if self._probe_paths == paths and detected is None:
             return
         self._probe_paths = paths
-        self.cancel_probe()
+        if self._probe is not None:
+            self._probe.cancel.set()
         self._probe = None
         self.set_devices(detected or ())
         if detected is not None or not all(paths):
@@ -177,7 +284,7 @@ class EncodeDeviceControls(QWidget):
         self._probe = thread
 
         def publish(devices):
-            if self._probe is thread:
+            if self._probe is thread and not thread.cancel.is_set():
                 self.set_devices(devices)
 
         def finished():
@@ -192,8 +299,90 @@ class EncodeDeviceControls(QWidget):
     def cancel_probe(self) -> None:
         if self._probe is not None:
             self._probe.cancel.set()
+        self._cancel_chroma_probes()
+
+    def set_chroma_tool_paths(self, ffmpeg: str, ffprobe: str) -> None:
+        self._chroma_paths = (ffmpeg, ffprobe)
+        self._chroma_context = copy_context()
+        self._schedule_chroma_probes()
+
+    def set_cpu_chroma_formats(self, encoder: str, selected: str = '') -> None:
+        chroma = selected or self.cpu_box.chroma.currentData()
+        self.cpu_box.set_chroma_formats(cpu_chroma_formats(encoder), chroma)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._schedule_chroma_probes()
+
+    def hideEvent(self, event) -> None:
+        self._cancel_chroma_probes()
+        super().hideEvent(event)
+
+    def _cancel_chroma_probes(self) -> None:
+        self._chroma_timer.stop()
+        for controls in self._controls.values():
+            if controls.chroma_probe is not None:
+                controls.chroma_probe.cancel.set()
+            if controls.chroma_pending:
+                controls.chroma_pending = False
+                controls.chroma_request = None
+
+    def _schedule_chroma_probes(self) -> None:
+        if not self.isVisible():
+            return
+        active = self.gpu_enabled and all(self._chroma_paths)
+        for device in self.devices:
+            controls = self._controls.get(device.key)
+            if controls is None:
+                continue
+            codec = controls.codec.currentData()
+            prores = codec == 'prores'
+            controls.chroma_field.setHidden(prores)
+            request = None
+            if active and controls.checkbox.isChecked() and not prores:
+                choice = VideoEncodeChoice(codec, controls.bit_depth.currentData(), controls.parameter_text().strip(), device)
+                request = self._chroma_paths, choice
+            if request == controls.chroma_request:
+                continue
+            if controls.chroma_probe is not None:
+                controls.chroma_probe.cancel.set()
+            controls.chroma_request = request
+            controls.chroma_pending = request is not None
+            controls.set_chroma_formats((), placeholder=self.t('Checking formats...') if request else '')
+            controls.chroma_field.setToolTip('')
+        if any(controls.chroma_pending and controls.chroma_probe is None for controls in self._controls.values()):
+            self._chroma_timer.start()
+
+    def _start_chroma_probes(self) -> None:
+        if not self.isVisible():
+            return
+        window = self.window()
+        for controls in self._controls.values():
+            if not controls.chroma_pending or controls.chroma_probe is not None:
+                continue
+            paths, choice = controls.chroma_request
+            thread = self._chroma_context.run(_ChromaProbeThread, paths, choice, window.parentWidget() or window)
+            controls.chroma_probe = thread
+            thread.finished.connect(self._finish_chroma_probe)
+            thread.finished.connect(thread.deleteLater)
+            thread.start()
+
+    def _finish_chroma_probe(self) -> None:
+        thread = self.sender()
+        controls = self._controls.get(thread.choice.device.key)
+        if controls is None or controls.chroma_probe is not thread:
+            return
+        controls.chroma_probe = None
+        if thread.cancel.is_set():
+            if controls.chroma_pending:
+                self._chroma_timer.start()
+            return
+        controls.chroma_pending = False
+        controls.set_chroma_formats(thread.formats, controls.preferred_chroma, self.t('No compatible format'))
+        controls.chroma_field.setToolTip(thread.error)
 
     def restore(self, preferences: EncodePreferences) -> None:
+        self.set_cpu_chroma_formats(preferences.encoder, preferences.chroma_format)
         self._cpu_enabled = preferences.cpu_enabled
         self._saved = {entry.device: entry for entry in preferences.gpu_devices}
         self._set_gpu_enabled(preferences.gpu_enabled)
@@ -222,6 +411,7 @@ class EncodeDeviceControls(QWidget):
             self.devices_changed.emit(devices)
 
     def _build_gpu_controls(self) -> None:
+        self._cancel_chroma_probes()
         while self._gpu_layout.count():
             widget = self._gpu_layout.takeAt(0).widget()
             widget.hide()
@@ -231,6 +421,7 @@ class EncodeDeviceControls(QWidget):
             saved = self._saved.get(device.key, GpuEncodePreferences(device.key))
             controls = _DeviceBox(self.device_label(device), 'Video codec', self.t, self.gpu_controls,
                                   manage_presets=self._manage_presets)
+            controls.preferred_chroma = saved.chroma_format
             controls.checkbox.setChecked(saved.enabled)
             if controls.preset_editor is not None:
                 controls.preset_editor.custom_presets = list(saved.custom_presets)
@@ -251,10 +442,16 @@ class EncodeDeviceControls(QWidget):
             controls.bit_depth.currentIndexChanged.connect(
                 lambda _, item=device: self._set_gpu_presets(item),
             )
+            controls.chroma.activated.connect(
+                lambda _, box=controls: setattr(box, 'preferred_chroma', box.chroma.currentData()),
+            )
             if controls.preset_editor is None:
                 controls.preset.currentIndexChanged.connect(
                     lambda _, box=controls: self._apply_gpu_preset(box),
                 )
+                controls.parameters.textChanged.connect(self._schedule_chroma_probes)
+            else:
+                controls.preset_editor.preview.textChanged.connect(self._schedule_chroma_probes)
         with QSignalBlocker(self.cpu_checkbox):
             self.cpu_checkbox.setChecked(self._cpu_enabled)
         self._update_selection()
@@ -283,6 +480,7 @@ class EncodeDeviceControls(QWidget):
         built_in = gpu_presets(device, codec, depth)
         if controls.preset_editor is not None:
             controls.preset_editor.set_mode(codec, built_in, bit_depth=depth, selected=preset or None)
+            self._schedule_chroma_probes()
             return
 
         saved = self._saved.get(device.key, GpuEncodePreferences(device.key))
@@ -302,6 +500,7 @@ class EncodeDeviceControls(QWidget):
             controls.preset.setProperty('encodePresetBuiltinCount', len(built_in))
             controls.preset.setCurrentIndex(max(0, controls.preset.findData(previous)))
         self._apply_gpu_preset(controls)
+        self._schedule_chroma_probes()
 
     @staticmethod
     def _apply_gpu_preset(controls: _DeviceBox) -> None:
@@ -328,6 +527,7 @@ class EncodeDeviceControls(QWidget):
             self.cpu_checkbox.setChecked(self._cpu_enabled or not any_gpu)
         self.cpu_box.options.setVisible(self.cpu_checkbox.isChecked() or self.cpu_checkbox.isHidden())
         self.selection_changed.emit()
+        self._schedule_chroma_probes()
 
     def enabled_devices(self) -> list[tuple[str, str]]:
         devices = [(device.key, self.device_label(device)) for device in self.devices
@@ -346,6 +546,7 @@ class EncodeDeviceControls(QWidget):
                 choices[device.key] = VideoEncodeChoice(
                     controls.codec.currentData(), controls.bit_depth.currentData(),
                     controls.parameter_text().strip(), device,
+                    controls.chroma.currentData() or ('yuv420' if controls.codec.currentData() == 'prores' else ''),
                 )
         return choices
 
@@ -366,6 +567,7 @@ class EncodeDeviceControls(QWidget):
             preferences[device.key] = GpuEncodePreferences(
                 device.key, controls.checkbox.isChecked(), controls.codec.currentData(),
                 controls.bit_depth.currentData(), preset, parameters, custom_presets,
+                controls.chroma.currentData() or controls.preferred_chroma,
             )
         return tuple(preferences.values())
 
@@ -377,4 +579,5 @@ class EncodeDeviceControls(QWidget):
         self.cpu_checkbox.setHidden(diy)
         self.cpu_box.codec_field.setHidden(diy)
         self.cpu_box.bit_depth_field.setHidden(diy)
+        self.cpu_box.chroma_field.setHidden(diy)
         self._update_selection()
