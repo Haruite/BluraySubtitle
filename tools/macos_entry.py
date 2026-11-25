@@ -29,7 +29,7 @@ def main():
         os.environ.setdefault("BLURAY_SUBTITLE_CONFIG_DIR", str(config))
     from src.main import main as start
 
-    if "--foreground" not in sys.argv and "--detached-gui" not in sys.argv:
+    if not any(arg in ("--detach", "--foreground", "--detached-gui") for arg in sys.argv[1:]):
         sys.argv.append("--detached-gui")
     start()
 

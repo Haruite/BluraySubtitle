@@ -179,6 +179,11 @@ def verify(bundle: Path, work: Path) -> None:
                         raise RuntimeError(f"{tool} loaded a host runtime library: {loaded}")
         return process.stdout, process.stderr
 
+    if run("bluraysub-gpu-capabilities", "--version", audit=True)[0].strip() != "2":
+        raise RuntimeError("The packaged GPU capability query failed its version check")
+    if not any(line.split()[1:2] == ["ffv1_vulkan"] for line in run("ffmpeg", "-hide_banner", "-encoders")[0].splitlines()):
+        raise RuntimeError("FFmpeg is missing the Vulkan FFV1 encoder")
+
     _, trace = run("mpv", "--no-config", "--ao=pipewire", "--audio-device=help", audit=True)
     client = native / "pipewire"
     modules = {Path(line.split("calling init: ", 1)[1].strip()) for line in trace.splitlines()

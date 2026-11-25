@@ -1456,3 +1456,16 @@ Linux and FreeBSD share application-drawn title bars under native Wayland. Each 
 The FreeBSD cache retains libplacebo and RIFE checkouts, the Cargo index, and the Go build cache. A failed check of the current week's runtime cache triggers reconstruction from cached components. Package checks render frames with bundled CPU filters and exercise 7-Zip and tsMuxeR on generated media.
 
 KDE on Linux and a nested Qt Wayland compositor on FreeBSD 14.5 passed theme and window-control checks. FreeBSD Xfce and Linux KDE supplied the light-mode accent color. Tests of the same archive on 14.5 and 15.1 covered VSEdit preview, mpv with uosc, Dolby Vision and HDR10+ extraction, and software Vulkan rendering with libplacebo and RIFE.
+
+## Per-device video encoding
+
+2026-11-24 to 2026-11-25 · Based on `c315233`
+
+For Blu-ray and Remux sources, each main or SP video can be assigned to an enabled CPU or GPU. Each device processes its rows in order, and different devices can encode concurrently with separate VPy scripts. GPU encoding is opt-in.
+The capability tool queries the driver before FFmpeg verifies formats, bit depths, and built-in presets with short encodes. Settings can run the same checks and copy the diagnostic report. Windows Quick Sync uses the selected D3D11 adapter with system-memory frames.
+Vulkan selects adapters by UUID and groups 8-, 10-, and 12-bit 4:2:0 FFV1 with the same GPU's vendor encoders. Windows, Linux, and macOS builds enable `ffv1_vulkan`. VideoToolbox adds ProRes 422 and 4444. On Windows ARM64, GPU encoding uses NVIDIA adapters.
+Settings gives CPU and GPU a copyable parameter preview and a custom preset editor. GPU presets are saved by device, codec, and bit depth.
+Hardware HEVC retains compatible static HDR and uses verified post-encode injection for Dolby Vision and HDR10+. Encode continues and reports omitted metadata by row. Final MKV muxing preserves source timestamps.
+On Windows with an RTX 5070, tests covered CPU and NVENC in one batch, 8- and 10-bit H.264, HEVC, and AV1, and 10-bit NVENC HEVC retaining all three HDR metadata types.
+x265 and NVENC encoded the tested Profile 7 samples as Profile 8 with matching timestamps. Vulkan FFV1 preserved decoded pixels and timestamps at all three depths. Software-generated ProRes samples preserved timestamps through MKVToolNix.
+The Windows ARM64 query tool cross-compiled, and offscreen Qt checks covered both source modes and preset persistence. Native ARM64, Quick Sync, AMF, and VideoToolbox runtime checks remain pending.

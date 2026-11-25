@@ -12,11 +12,11 @@ import os
 import threading
 from typing import Optional
 
-from PyQt6.QtCore import QTimer, QThread, Qt
+from PyQt6.QtCore import QSignalBlocker, QTimer, QThread, Qt
 from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem, QToolButton
 
 from src.core import ENCODE_SP_LABELS
-from src.runtime.gui_runtime_classes.custom_table_widget import READ_ONLY_HINT_ROLE
+from src.runtime.gui_runtime_classes.custom_table_widget import READ_ONLY_HINT_ROLE, StyledComboBox
 from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
 from src.runtime.gui_runtime_classes.sp_table_items import SP_STANDALONE_TRACKS_ROLE, SpSelectionItem
 from src.runtime.gui_runtime_classes.sp_table_scan_worker import SpTableScanWorker
@@ -407,6 +407,68 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
 
+    def _refresh_encode_device_columns(self) -> None:
+        if self.get_selected_function_id() != 4:
+            return
+        for table in (self.table2, self.table3):
+            self._apply_encode_device_column_visibility(table)
+            if self.encode_device_controls.gpu_enabled:
+                for row in range(table.rowCount()):
+                    self._update_encode_device_cell(table, row)
+            self._resize_table_columns_for_language(table)
+        self._refresh_table_descriptions()
+
+    def _update_encode_device_cell(self, table: QTableWidget, row: int) -> None:
+        labels = table.property('columnKeys') or ()
+        if 'video_encode_device' not in labels or not self.encode_device_controls.gpu_enabled:
+            return
+        column = labels.index('video_encode_device')
+        is_sp = table is self.table3
+        remux_source = 'bdmv_index' not in labels
+        source = ''
+        identity = None
+        if remux_source:
+            source = (self._get_remux_source_path_from_table3_row(row) if is_sp
+                      else self._get_remux_source_path_from_table2_row(row))
+            if source:
+                identity = ('remux', os.path.normcase(os.path.abspath(source)))
+        elif is_sp:
+            entry = SpEntry.from_mapping(self._table3_get_sp_entry_for_row(row))
+            if entry.bdmv_root and (entry.mpls_file or entry.m2ts_files):
+                identity = ('sp', entry.track_key, entry.m2ts_file_detail)
+        else:
+            disc = table.item(row, labels.index('bdmv_index'))
+            if disc is not None and (playlist := disc.data(Qt.ItemDataRole.UserRole)):
+                if not os.path.isabs(playlist):
+                    playlist = os.path.join(self._get_disc_root_for_bdmv_index(disc.text()), playlist)
+                detail = table.item(row, labels.index('m2ts_file_detail'))
+                identity = ('main', os.path.normcase(os.path.normpath(playlist)), detail.text() if detail else '')
+
+        combo = table.cellWidget(row, column)
+        if combo is None:
+            combo = StyledComboBox(table)
+            combo.setProperty('encodeDeviceName', True)
+            table.setCellWidget(row, column, combo)
+            if is_sp and not remux_source:
+                combo.hide()
+
+            def remember_choice():
+                if combo.encode_source_key is not None and combo.currentData() is not None:
+                    self._encode_device_by_source[combo.encode_source_key] = combo.currentData()
+
+            combo.currentIndexChanged.connect(remember_choice)
+        previous = self._encode_device_by_source.get(identity)
+        if previous is None and getattr(combo, 'encode_source_key', None) == identity:
+            previous = combo.currentData()
+        combo.encode_source_key = identity
+        with QSignalBlocker(combo):
+            combo.clear()
+            for key, caption in self.encode_device_controls.enabled_devices():
+                combo.addItem(caption, key)
+            combo.setCurrentIndex(max(0, combo.findData(previous)))
+        if is_sp and remux_source:
+            combo.setVisible(not source.lower().endswith('.mka'))
+
     def ensure_encode_row_widgets(self, row_index: int, table: QTableWidget | None = None):
         if self.get_selected_function_id() != 4:
             return
@@ -414,6 +476,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         labels = table.property('columnKeys') or ()
         if 'vpy_path' not in labels:
             return
+        self._update_encode_device_cell(table, row_index)
         vpy_col = labels.index('vpy_path')
         if table.cellWidget(row_index, vpy_col) is None:
             table.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget(parent=table))

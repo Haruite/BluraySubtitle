@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Callable
 
@@ -148,6 +149,7 @@ def prepare_dolby_vision_encode(
         temporary_parent: str,
         crop_plan: VideoCropPlan | None = None,
         *,
+        default_duration_ns: int | None = None,
         check_cancel: Callable[[], None] | None = None,
 ) -> DolbyVisionEncodePlan:
     """Identify the original layer and prepare base video plus profile 8.1 RPU for Encode."""
@@ -160,7 +162,7 @@ def prepare_dolby_vision_encode(
     os.makedirs(temporary_parent, exist_ok=True)
     work_folder = tempfile.mkdtemp(prefix='_dovi_encode_', dir=temporary_parent)
     source_hevc = os.path.join(work_folder, 'source.hevc')
-    base_layer = os.path.join(work_folder, 'base-layer.hevc')
+    base_layer = source_path
     rpu_path = os.path.join(work_folder, 'rpu.bin')
     original_rpu_path = os.path.join(work_folder, 'rpu-original.bin')
     extracted_rpu_path = (
@@ -192,17 +194,36 @@ def prepare_dolby_vision_encode(
         fel_residual_discarded = source_profile is None or (
             source_profile == 7 and layer_type != 'MEL'
         )
-        # Removing DV data also works for P8.1 inputs that have no enhancement layer to demux.
-        base_command = [dovi_tool, 'remove', source_hevc, '-o', base_layer]
-        if run_command(base_command, cwd=work_folder, timeout=7200,
-                       log_template='Dolby Vision command: {command}').returncode != 0 or not (
-                os.path.isfile(base_layer) and os.path.getsize(base_layer) > 0
-        ):
-            raise RuntimeError(
-                translate_text('dovi_tool did not create the Dolby Vision base layer: {path}').format(
-                    path=source_path
+        if source_profile != 8:
+            base_hevc = os.path.join(work_folder, 'base-layer.hevc')
+            base_command = [dovi_tool, 'remove', source_hevc, '-o', base_hevc]
+            if run_command(base_command, cwd=work_folder, timeout=7200,
+                           log_template='Dolby Vision command: {command}').returncode != 0 or not (
+                    os.path.isfile(base_hevc) and os.path.getsize(base_hevc) > 0
+            ):
+                raise RuntimeError(
+                    translate_text('dovi_tool did not create the Dolby Vision base layer: {path}').format(
+                        path=source_path
+                    )
                 )
-            )
+
+            with suppress(OSError):
+                os.remove(source_hevc)
+            # A container lets LWLibavSource index the stripped HEVC stream.
+            base_layer = os.path.join(work_folder, 'base-layer.mkv')
+            mux_command = [require_tool_path('MKV_MERGE_PATH'), *ui_language.split(), '-o', base_layer]
+            if default_duration_ns:
+                mux_command.extend(['--default-duration', f'0:{default_duration_ns}ns'])
+            mux_command.append(base_hevc)
+            if run_command(mux_command, cwd=work_folder, timeout=7200,
+                           log_template='Mux command: {command}').returncode not in (0, 1) or not (
+                    os.path.isfile(base_layer) and os.path.getsize(base_layer) > 0
+            ):
+                raise RuntimeError(translate_text(
+                    'mkvmerge did not create the Dolby Vision base-layer MKV: {path}'
+                ).format(path=source_path))
+            with suppress(OSError):
+                os.remove(base_hevc)
 
         # Convert the already extracted metadata after identifying the original EL.
         conversion_config = os.path.join(work_folder, 'rpu-conversion.json')
@@ -378,6 +399,8 @@ def edit_dolby_vision_rpu_for_crop(
 def inject_dolby_vision_rpu(
         encoded_hevc: str,
         plan: DolbyVisionEncodePlan,
+        *,
+        expected_frame_count: int | None = None,
 ) -> None:
     """Inject profile 8.1 RPU metadata, retaining a non-empty partial output on failure."""
     encoded_path = os.path.abspath(os.path.normpath(encoded_hevc))
@@ -414,6 +437,8 @@ def inject_dolby_vision_rpu(
                 path=encoded_path
             )
         )
+    if expected_frame_count is not None:
+        verify_dolby_vision_rpu(temporary_output, expected_frame_count, 8)
     os.replace(temporary_output, encoded_path)
 
 

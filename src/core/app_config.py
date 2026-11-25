@@ -16,6 +16,7 @@ from typing import Any, Callable
 from src.core.encode_presets import (
     ENCODE_PRESET_NAMES,
     UserEncodePreset,
+    UserGpuEncodePreset,
     encode_preset_parameters,
     encode_presets_for_encoder,
 )
@@ -101,11 +102,26 @@ class RemuxPreferences:
 
 
 @dataclass(frozen=True)
+class GpuEncodePreferences:
+    device: str
+    enabled: bool = False
+    codec: str = "hevc"
+    bit_depth: str = "10"
+    preset: str = "Balanced"
+    parameters: str | None = None
+    custom_presets: tuple[UserGpuEncodePreset, ...] = ()
+
+
+@dataclass(frozen=True)
 class EncodePreferences:
     encoder: str = "x265"
     bit_depth: str = "10"
     preset: str = "Balanced"
     custom_presets: tuple[UserEncodePreset, ...] = ()
+    cpu_enabled: bool = True
+    cpu_parameters: str | None = None
+    gpu_enabled: bool = False
+    gpu_devices: tuple[GpuEncodePreferences, ...] = ()
     lossless_audio_codec: str = "flac"
     subtitle_mode: str = "external"
     use_getnative: bool = True
@@ -333,6 +349,60 @@ def _migrate_legacy_encode_parameters(
     ),)
 
 
+def _optional_encode_parameters(section: dict[str, Any], name: str) -> str | None:
+    return None if section.get(name) is None else _string_value(section, name, "")
+
+
+def _custom_gpu_encode_presets(entry: dict[str, Any]) -> tuple[UserGpuEncodePreset, ...]:
+    items = entry.get("custom_presets", [])
+    if not isinstance(items, list):
+        raise ValueError("Configuration value must be a list: custom_presets")
+    presets = []
+    names = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("GPU encode presets must contain objects")
+        encoder = _string_value(item, "encoder", "").strip().lower()
+        bit_depth = _string_value(item, "bit_depth", "").strip()
+        name = _string_value(item, "name", "").strip()
+        if not encoder or not bit_depth or not name:
+            raise ValueError("GPU encode presets require a codec, bit depth, and name")
+        key = (encoder, bit_depth, name.casefold())
+        if key in names:
+            raise ValueError(f"Duplicate custom encode preset for {encoder}: {name}")
+        names.add(key)
+        presets.append(UserGpuEncodePreset(
+            encoder=encoder,
+            bit_depth=bit_depth,
+            name=name,
+            parameters=_string_value(item, "parameters", "").strip(),
+        ))
+    return tuple(presets)
+
+
+def _gpu_encode_preferences(encode: dict[str, Any]) -> tuple[GpuEncodePreferences, ...]:
+    entries = encode.get("gpu_devices", ())
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError("GPU encode settings must be an array")
+    devices = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("GPU encode settings must contain objects")
+        key = _string_value(entry, "device", "")
+        if not key or key in devices:
+            raise ValueError("GPU encode settings require unique device identifiers")
+        devices[key] = GpuEncodePreferences(
+            key,
+            _boolean_value(entry, "enabled", False),
+            _string_value(entry, "codec", "hevc"),
+            _string_value(entry, "bit_depth", "10"),
+            _string_value(entry, "preset", "Balanced"),
+            _optional_encode_parameters(entry, "parameters"),
+            _custom_gpu_encode_presets(entry),
+        )
+    return tuple(devices.values())
+
+
 def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     if not isinstance(raw, dict):
         raise ValueError("Configuration root must be a JSON object")
@@ -511,6 +581,10 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             bit_depth=bit_depth,
             preset=preset,
             custom_presets=custom_presets,
+            cpu_enabled=_boolean_value(encode, "cpu_enabled", True),
+            cpu_parameters=_optional_encode_parameters(encode, "cpu_parameters"),
+            gpu_enabled=_boolean_value(encode, "gpu_enabled", False),
+            gpu_devices=_gpu_encode_preferences(encode),
             lossless_audio_codec=lossless_audio_codec,
             subtitle_mode=subtitle_mode,
             use_getnative=_boolean_value(
@@ -667,6 +741,7 @@ __all__ = [
     "AppConfig",
     "AudioPreferences",
     "EncodePreferences",
+    "GpuEncodePreferences",
     "FontPreferences",
     "PathPreferences",
     "RemuxPreferences",

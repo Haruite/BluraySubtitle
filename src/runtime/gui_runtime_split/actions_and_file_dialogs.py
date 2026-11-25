@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6 import sip
-from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize, QUrl
+from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QSizePolicy, QRadioButton, QButtonGroup, QCheckBox, \
-    QDoubleSpinBox, QGridLayout, QSpacerItem, QStyle, QStyleOptionComboBox
+    QDoubleSpinBox, QGridLayout
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
@@ -47,6 +47,8 @@ from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
 from src.runtime.gui_runtime_classes.spin_box import StyledDoubleSpinBox
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
+from src.runtime.gui_runtime_classes.encode_devices import EncodeDeviceControls
+from src.runtime.hardware_encode import VideoEncodeChoice
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.chapter_worker import AddChaptersRequest, ChapterWorker
@@ -193,17 +195,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         encode_visible = box is not None and not box.isHidden()
         show_full_codec = fid == 4 and encode_visible
         show_diy_hint = fid == 5 and encode_visible
+        self.encode_device_controls.set_diy_mode(fid == 5)
         hint = getattr(self, 'diy_bd_encode_hint_label', None)
-        for w in (
-            getattr(self, 'encode_tool_label', None),
-            getattr(self, 'encode_tool_combo', None),
-            getattr(self, 'encode_bit_depth_label', None),
-            getattr(self, 'encode_bit_depth_combo', None),
-            getattr(self, 'lossless_audio_compression_label', None),
-            getattr(self, 'encode_lossless_audio_combo', None),
-        ):
-            if w is not None:
-                w.setVisible(show_full_codec)
+        self.encode_audio_row.setVisible(show_full_codec)
         if hint is not None:
             hint.setVisible(show_diy_hint)
 
@@ -923,6 +917,22 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 ),
                 audio_encoding=self._captured_audio_encoding_settings(),
             )
+            device_choices = self.encode_device_controls.gpu_choices()
+            if self.encode_device_controls.cpu_checkbox.isChecked():
+                device_choices['cpu'] = encode_settings.cpu_encode_choice()
+
+            def captured_video_device(
+                    table: QTableWidget, row: int, *, required: bool = True,
+            ) -> VideoEncodeChoice | None:
+                if not required or not self.encode_device_controls.gpu_enabled:
+                    return None
+                column = table.property('columnKeys').index('video_encode_device')
+                combo = table.cellWidget(row, column)
+                key = combo.currentData() if isinstance(combo, QComboBox) else None
+                if key not in device_choices:
+                    raise ValueError(self.t('Select a video encoding device in row {row}').format(row=row + 1))
+                return device_choices[key]
+
             track_selection_snapshot = copy.deepcopy(
                 getattr(self, '_track_selection_config', {}) or {}
             )
@@ -1018,6 +1028,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         vpy_path=self.get_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
                         subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
                         subtitle_language=language,
+                        video_encode=captured_video_device(self.table2, row_index, required=not output_is_checkpoint),
                         **captured_track_options(
                             media_track_key('mkv', source_path),
                             row_index + 1,
@@ -1049,6 +1060,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             source_path=os.path.normpath(source_path),
                             output_path=output_path,
                             vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
+                            video_encode=captured_video_device(
+                                self.table3, row_index,
+                                required=not output_is_checkpoint and output_extension == '.mkv',
+                            ),
                             **captured_track_options(
                                 media_track_key('mkvsp', source_path),
                                 row_index + 1,
@@ -1105,6 +1120,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         subtitle_language=subtitle_languages[row_index],
                         configuration_key=configuration_key,
                         configuration=row_configuration,
+                        video_encode=captured_video_device(self.table2, row_index),
                         **captured_track_options(main_track_key, row_index + 1),
                     ))
 
@@ -1123,16 +1139,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             if output_name
                             else ''
                         )
+                        uses_main_output = bool(
+                            sp_output_path and os.path.normcase(os.path.abspath(sp_output_path)) in main_output_paths
+                        )
                         sp_rows.append(EncodeRow(
                             source_path='',
                             output_path=sp_output_path,
                             vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
                             sp_entry=sp_entry,
                             selected=bool(sp_entry.selected and output_name),
-                            uses_main_output=bool(
-                                sp_output_path
-                                and os.path.normcase(os.path.abspath(sp_output_path))
-                                in main_output_paths
+                            uses_main_output=uses_main_output,
+                            video_encode=captured_video_device(
+                                self.table3, row_index,
+                                required=bool(
+                                    sp_entry.selected and not uses_main_output and sp_output_path.lower().endswith('.mkv')
+                                ),
                             ),
                             **captured_track_options(
                                 sp_entry.track_key,
@@ -1177,34 +1198,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 },
             )
             validate_encode_request(request, check_tools=True)
-
-            if request.input_mode == 'remux':
-                from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
-
-                pending_video_sources = [
-                    row.source_path
-                    for row in (*request.main_rows, *request.sp_rows)
-                    if (
-                        row.selected
-                        and row.source_path.lower().endswith('.mkv')
-                        and not (
-                            os.path.isfile(row.output_path)
-                            and os.path.getsize(row.output_path) > 0
-                        )
-                    )
-                ]
-                dolby_vision_error = (
-                    encode_dovi_preflight_mkv_paths(
-                        pending_video_sources,
-                        request.settings.encoder,
-                        request.settings.bit_depth,
-                    )
-                    if pending_video_sources
-                    else None
-                )
-                if dolby_vision_error:
-                    AnimatedMessageBox.warning(self, ' ', dolby_vision_error)
-                    return
         except Exception as error:
             print_tb_string_terminal(traceback.format_exc())
             self._show_error_dialog(str(error))
@@ -1526,32 +1519,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.encode_bit_depth_combo.setCurrentIndex(pick)
         self.encode_bit_depth_combo.blockSignals(False)
 
-    def _resize_encode_tool_combos(self) -> None:
-        if getattr(self, 'encode_tool_combo', None) is None:
-            return
-        combos = (
-            self.x265_preset_combo,
-            self.encode_tool_combo,
-            self.encode_bit_depth_combo,
-            self.encode_lossless_audio_combo,
-        )
-        minimum_width = 80
-        preferred_width = minimum_width
-        for combo in combos:
-            combo.ensurePolished()
-            option = QStyleOptionComboBox()
-            combo.initStyleOption(option)
-            metrics = option.fontMetrics
-            text_width = max((metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())), default=0)
-            preferred_size = combo.style().sizeFromContents(
-                QStyle.ContentsType.CT_ComboBox, option, QSize(text_width, metrics.height()), combo,
-            )
-            preferred_width = max(preferred_width, preferred_size.width())
-        maximum_width = min(520, preferred_width)
-        for combo in combos:
-            combo.setMinimumWidth(minimum_width)
-            combo.setMaximumWidth(maximum_width)
-
     def _reload_encode_preset_parameters(self) -> None:
         custom_presets = self._app_config.encode.custom_presets
         self._x265_preset_params = encode_presets_for_encoder(
@@ -1586,13 +1553,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 pass
         tool = (self.encode_tool_combo.currentText() or 'x265').strip()
         if tool == 'x264':
-            self.x265_params_label.setText(self.t('x264 Params:'))
             self._encode_preset_params = dict(self._x264_preset_params)
         elif tool == 'SvtAv1':
-            self.x265_params_label.setText(self.t('SvtAv1 Params:'))
             self._encode_preset_params = dict(self._svtav1_preset_params)
         else:
-            self.x265_params_label.setText(self.t('x265 Params:'))
             self._encode_preset_params = dict(self._x265_preset_params)
         self._refill_encode_bit_depth_combo(tool)
         if getattr(self, 'x265_preset_combo', None) is not None:
@@ -1615,7 +1579,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.x265_preset_combo.setCurrentIndex(max(0, preset_index))
             finally:
                 self.x265_preset_combo.blockSignals(False)
-        self._resize_encode_tool_combos()
         try:
             sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
             if callable(sync):
@@ -1646,24 +1609,23 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.encode_box.setLayout(layout)
 
+        self.encode_device_controls = EncodeDeviceControls(self.t, self.encode_box)
+        layout.addWidget(self.encode_device_controls)
+        self.encode_device_controls.selection_changed.connect(self._refresh_encode_device_columns)
+        cpu_box = self.encode_device_controls.cpu_box
+        self.encode_tool_combo = cpu_box.codec
+        self.encode_tool_combo.addItems(['x264', 'x265', 'SvtAv1'])
+        self.encode_tool_combo.setCurrentText('x265')
+        self.encode_bit_depth_combo = cpu_box.bit_depth
+        self.x265_preset_combo = cpu_box.preset
+        self.x265_params_edit = cpu_box.parameters
+
         tools_row = QWidget(self.encode_box)
         tools_layout = QGridLayout()
         tools_layout.setContentsMargins(0, 0, 0, 0)
         tools_layout.setHorizontalSpacing(12)
         tools_layout.setVerticalSpacing(8)
         tools_row.setLayout(tools_layout)
-
-        self.encode_tool_label = QLabel(self.t('Encoder tool:'), tools_row)
-        tools_layout.addWidget(self.encode_tool_label, 0, 0)
-        self.encode_tool_combo = StyledComboBox(tools_row)
-        self.encode_tool_combo.addItems(['x264', 'x265', 'SvtAv1'])
-        self.encode_tool_combo.setCurrentText('x265')
-        tools_layout.addWidget(self.encode_tool_combo, 0, 1)
-
-        self.encode_bit_depth_label = QLabel(self.t('Output bit depth:'), tools_row)
-        tools_layout.addWidget(self.encode_bit_depth_label, 0, 3)
-        self.encode_bit_depth_combo = StyledComboBox(tools_row)
-        tools_layout.addWidget(self.encode_bit_depth_combo, 0, 4)
 
         self.diy_bd_encode_hint_label = QLabel(
             self.t(
@@ -1675,29 +1637,26 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.diy_bd_encode_hint_label.setWordWrap(True)
         tools_layout.addWidget(self.diy_bd_encode_hint_label, 3, 0, 1, 6)
 
-        self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
-        tools_layout.addWidget(self.x265_params_label, 2, 0)
-        self.x265_preset_combo = StyledComboBox(tools_row)
-        tools_layout.addWidget(self.x265_preset_combo, 2, 1)
-
+        audio_row = QWidget(self.encode_box)
+        audio_layout = QHBoxLayout(audio_row)
+        audio_layout.setContentsMargins(0, 0, 0, 0)
         self.lossless_audio_compression_label = QLabel(
             self.t('Lossless audio compression'),
-            tools_row,
+            audio_row,
         )
-        tools_layout.addWidget(self.lossless_audio_compression_label, 2, 3)
-        self.encode_lossless_audio_combo = StyledComboBox(tools_row)
+        audio_layout.addWidget(self.lossless_audio_compression_label)
+        self.encode_lossless_audio_combo = StyledComboBox(audio_row)
         self.encode_lossless_audio_combo.addItem('FLAC', 'flac')
         self.encode_lossless_audio_combo.addItem('AAC', 'aac')
         self.encode_lossless_audio_combo.addItem('Opus', 'opus')
         self.encode_lossless_audio_combo.setCurrentIndex(0)
         self._encode_lossless_preset_updating = False
         self.encode_lossless_audio_combo.currentIndexChanged.connect(self._on_encode_lossless_audio_preset_changed)
-        tools_layout.addWidget(self.encode_lossless_audio_combo, 2, 4)
-        # Share the available width if both combo columns cannot reach their preferred size.
-        tools_layout.setColumnStretch(1, 1)
-        tools_layout.setColumnStretch(4, 1)
-        tools_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding), 0, 2)
-        tools_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding), 0, 5)
+        audio_layout.addWidget(self.encode_lossless_audio_combo)
+        audio_layout.addStretch()
+        self.encode_audio_row = audio_row
+        tools_layout.setColumnStretch(0, 1)
+        tools_layout.setColumnStretch(3, 1)
         primary_options = QVBoxLayout()
         secondary_options = QVBoxLayout()
         for options in (primary_options, secondary_options):
@@ -1744,6 +1703,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.use_bluray_compat_params_checkbox.setChecked(False)
         primary_options.addWidget(self.use_bluray_compat_params_checkbox)
         layout.addWidget(tools_row)
+        layout.addWidget(audio_row)
 
         self.vpy_processing_row = QWidget(self.encode_box)
         processing_layout = QGridLayout(self.vpy_processing_row)
@@ -1805,11 +1765,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         )
         processing_layout.setColumnStretch(6, 1)
         layout.addWidget(self.vpy_processing_row)
-
-        self.x265_params_edit = QPlainTextEdit(self.encode_box)
-        self.x265_params_edit.setFixedHeight(96)
-        self.x265_params_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        layout.addWidget(self.x265_params_edit)
 
         def set_params_for_preset(preset: str):
             params = self._encode_preset_params.get(preset, '')

@@ -193,12 +193,9 @@ class BluraySubtitleGuiBase(QWidget):
         self.vpy_deband_strength_spin = None
         self.vpy_antialiasing_strength_spin = None
         self.encode_tool_combo = None
-        self.encode_tool_label = None
         self.encode_bit_depth_combo = None
-        self.encode_bit_depth_label = None
         self.diy_bd_encode_hint_label = None
         self.x265_params_edit = None
-        self.x265_params_label = None
         self.x265_preset_combo = None
 
     def __init_subclass__(cls, **kwargs):
@@ -242,6 +239,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _apply_encode_codec_slot_visibility(self) -> None:
         raise NotImplementedError
 
+    def _apply_encode_device_column_visibility(self, table: QTableWidget) -> None:
+        raise NotImplementedError
+
     def _apply_encode_input_mode_ui(self):
         raise NotImplementedError
 
@@ -270,6 +270,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _apply_saved_encode_defaults(self) -> None:
+        raise NotImplementedError
+
+    def _apply_saved_encode_devices(self) -> None:
         raise NotImplementedError
 
     def _apply_saved_ui_preferences(self, previous: UiPreferences | None=None) -> None:
@@ -691,6 +694,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_all_table_headers(self):
         raise NotImplementedError
 
+    def _refresh_encode_device_columns(self) -> None:
+        raise NotImplementedError
+
     def _refresh_encode_tool_dependent_ui(self, apply_preset: bool=True) -> None:
         raise NotImplementedError
 
@@ -764,9 +770,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _reset_table3_column_layout(self):
-        raise NotImplementedError
-
-    def _resize_encode_tool_combos(self) -> None:
         raise NotImplementedError
 
     def _resize_table_columns_for_language(self, table: QTableWidget):
@@ -956,6 +959,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _unchecked_segments_from_checkbox_states(self, mpls_path: str) -> tuple[list[tuple[int, int]], dict[int, str]]:
+        raise NotImplementedError
+
+    def _update_encode_device_cell(self, table: QTableWidget, row: int) -> None:
         raise NotImplementedError
 
     def _update_exe_button_progress(self, value: Optional[int]=None, text: Optional[str]=None):

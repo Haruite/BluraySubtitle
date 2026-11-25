@@ -55,6 +55,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 ### Encode controls
 
 - x264 supports 8/10-bit, and x265 supports 8/10/12-bit. Standard SVT-AV1 builds support 8/10-bit. The 12-bit choice appears only when the selected encoder supports it.
+- Encode uses all CPU sockets by default. To use a GPU, turn on **Enable GPU encoding** under **Settings → Advanced → Video encoding devices**, select a detected GPU in **Encode**, then assign it to main or SP videos. Videos assigned to different devices can encode concurrently.
 - Source CFR/VFR timing and audio/video synchronization are preserved. VPy processing must preserve frame correspondence; [prefix tests](#how-do-i-run-a-short-encode-test) are also supported.
 - Built-in presets are read-only. Manage user presets under **Advanced** or edit encoder parameters directly.
 - Each main/SP row can specify a VPy and per-track FLAC/AAC/Opus conversion. Subtitle modes are external, softsub, and hardsub; Remux sources also support chapter/attachment editing.
@@ -62,7 +63,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 - The generated VPy provides denoise, dehalo, dering, deband, and anti-aliasing strength controls.
 - Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Use the [getnative script](src/scripts/getnative_file.py) for higher-resolution analysis.
 - Review automatic cropping visually. Comparison images and frame-check reports are saved under `Compare` and `FrameCheck` in the output folder. Full frame checks may take several times the video's duration.
-- Use x265 10-bit to preserve Dolby Vision; x265 10/12-bit supports HDR10+. FEL image residuals cannot be used for encoding and are reported at completion; SVT-AV1 reports that Dolby Vision cannot be retained.
+- For GPU encoding with HDR10+ or Dolby Vision, select HEVC 10-bit. On CPU, use x265 10-bit for Dolby Vision or x265 10/12-bit for HDR10+. Encode continues with the selected format and lists omitted HDR metadata and discarded FEL residuals in the completion report.
 
 For parameters, filters, preview, and metadata limitations, see [Video Encoding and VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.md).
 
@@ -180,7 +181,7 @@ Check [Remux settings](#remux-controls) and output names before running. Existin
 Typical flow:
 
 1. Choose input source (**Blu-ray / Remux**).
-2. Configure VPy, encoder, subtitle packaging, etc.
+2. Configure the enabled encoding devices, choose a device for each video, and review VPy and subtitle packaging.
 3. (Optional) Edit tracks / **select all tracks**.
 4. (Optional) Set **start / end chapter** per row.
 5. Run encode.

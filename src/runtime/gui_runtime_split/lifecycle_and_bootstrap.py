@@ -71,6 +71,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             5: '',
         }
         self._auto_output_folders = {3: '', 4: '', 5: ''}
+        self._encode_device_by_source: dict[tuple[str, ...], str] = {}
         self._bdmv_source_state_path = ''
         self._bdmv_load_pending = False
         self._bdmv_load_replaced = False
@@ -1048,6 +1049,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         )
         if not minimize_to_tray:
             self._close_pending = True
+            self.encode_device_controls.cancel_probe()
             self._bdmv_load_timer.stop()
             if self._bdmv_load_cancel_event is not None:
                 self._bdmv_load_cancel_event.set()

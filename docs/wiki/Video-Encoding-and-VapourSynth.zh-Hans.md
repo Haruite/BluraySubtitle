@@ -18,6 +18,28 @@
 
 画质取决于源纹理／运动、编码器版本、码率控制、preset、滤镜和播放条件。应从同一来源截取代表性样本，在目标观看距离比较；把某次测试结果再转成另一编码会增加世代损失，使比较失真。
 
+## 视频压制设备
+
+**启用 GPU 设备压制**默认关闭。在**设置 → 高级 → 视频压制设备设置**开启后，压制区显示 GPU 设置，正片和 SP 表格显示**视频压制设备**列。压制区和高级设置都按设备显示编码工具或格式、位深和预设。
+
+检测先查询驱动支持的编码格式和位深，再用 FFmpeg 试压相应组合和预设，由 FFprobe 校验输出帧。**检测 GPU**使用同一套流程，**复制报告**可获取驱动报告的能力、实际命令和验证通过的组合。源码运行时，环境配置脚本会将能力查询工具安装在 FFmpeg 所在目录。
+
+| 安装目标 | 硬件编码后端 |
+| --- | --- |
+| 标准 Windows x64 | NVIDIA NVENC、Intel Quick Sync、AMD AMF 和 Vulkan |
+| Windows ARM64 | 使用原生驱动在 NVIDIA 显卡上使用 NVENC 和 Vulkan |
+| Linux x64 | 通过 CUDA 使用 NVIDIA NVENC，借助 VAAPI 和 oneVPL 使用 Intel Quick Sync，通过 AMD 运行时使用 AMD AMF，以及 Vulkan |
+| Linux ARM64 | 安装的驱动支持时使用 NVIDIA NVENC 和 Vulkan |
+| Intel 与 Apple 芯片的 macOS | 由系统选择的 VideoToolbox 硬件编码器，以及通过 MoltenVK 使用 Vulkan |
+
+GPU 出现在界面上需要所配置的 FFmpeg 包含对应硬件后端，且主机驱动可用。Linux 的 AMF 接口由驱动选择 Vulkan 适配器，因此只有一个 AMD 渲染设备时才提供该选项。VideoToolbox 显示一个由系统选择的设备。在 Windows x64，若各厂商后端均未通过，带 Media Foundation 的自定义 FFmpeg 可提供由系统选择的 8 位硬件编码器。 [FFmpeg 硬件设备文档](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options) · [NVIDIA 原生 ARM64 NVENC 要求](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#basic-encoding-flow)
+
+Vulkan 使用 GPU 计算着色器压制 FFV1，需要支持 Vulkan 1.3 的 GPU 驱动和编入 `ffv1_vulkan` 的 FFmpeg。BluraySubtitle 提供验证通过的 8 位、10 位和 12 位 4:2:0 组合，将无损 FFV1 v4 视频混流到最终 MKV。有厂商编码器的显卡也可在同一个设备框内选择 FFV1。 [FFV1 格式和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#ffv1) · [FFmpeg Vulkan 计算编码器](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
+
+在 macOS 上，VideoToolbox 可提供 10 位 ProRes 422 和 12 位 ProRes 4444 的各档规格。BluraySubtitle 列出通过短片硬件试压的规格，并将视频混流到最终 MKV。 [ProRes 规格和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#apple-prores) · [Apple VideoToolbox 编码能力查询](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
+
+各设备分别按表格顺序处理分配给自己的条目，并可同时压制。附加到正片的 SP 轨道跟随正片输出。同一套 VapourSynth 流程向 CPU 和 GPU 编码器提供处理好的画面。
+
 ## BluraySubtitle 压制管线
 
 原盘输入的高层流程如下：
@@ -36,7 +58,8 @@ vspipe --container y4m
         │
         ├── x264  → .h264
         ├── x265  → .hevc
-        └── SVT-AV1 → .ivf
+        ├── SVT-AV1 → .ivf
+        └── FFmpeg 硬件编码器 → .h264、.hevc、.ivf 或临时 .mkv
         │
         ▼
 与所选音频、字幕、章节、附件和元数据混流成最终 MKV
@@ -44,7 +67,7 @@ vspipe --container y4m
 
 暂存 Remux 会保留源音频。只有视频成功压制后，最终混流阶段才进行音频转换和清理，避免在视频结果尚未生成时提前执行有损或耗时的音频操作。
 
-`vspipe` 通过管道向编码器提供 Y4M 帧，所以普通压制不需要落盘一份完整的未压缩视频。编码器产生的基本流是中间文件，最终交付给用户的是 MKV。
+`vspipe` 通过管道向编码器提供 Y4M 帧，所以普通压制不需要落盘一份完整的未压缩视频。编码后的视频是临时文件，最终作为视频轨道写入 MKV。
 
 在**设置 → 外部工具**中将 `VSPIPE_PATH` 设为压制和 FrameCheck 使用的 VSPipe。独立安装的 VapourSynth 需要对应的 Python 绑定和 `mvsfunc.py` 等滤镜脚本。Linux 会将 `PLUGIN_PATH` 指定的兼容插件目录传给所配置的 VSPipe。编码器和 VSEdit 的路径在各自对应的行设置。
 
@@ -77,7 +100,9 @@ BluraySubtitle 又在编码器参数之上提供了一层项目预设：
 | Very High Quality／超高质 | 比高质档增加分析量并进一步降低 CRF |
 | Extreme／极限 | 极慢且质量预算很大的起点 |
 
-每个压制工具都有六组只读内置预设。“高级”设置可以为其中当前选择的压制工具新增、重命名、修改和删除用户预设。`config.json` 只保存用户预设。Encode 页面只显示当前压制工具对应的内置预设和用户预设。选择预设会填充参数框，直接修改参数框则保持所选预设名称不变。任务启动时界面可见的参数字符串具有最高权威。
+每个 CPU 编码器都有六组内置预设。在高级设置中，可以从单行**参数预览**复制当前预设的参数。在**自定义压制预设**中，可以用已有预设作为起点新增预设，再修改名称和参数。CPU 自定义预设按编码器保存，GPU 自定义预设按设备、编码格式和位深保存。`config.json` 保存各设备默认值和用户预设。
+
+在压制区选择预设时会填充**压制参数**。直接修改时保留所选预设名称，执行时使用启动瞬间界面所显示的参数。
 
 ## 内置参数预设
 
@@ -195,6 +220,10 @@ x265 10-bit 对 Dolby Vision 输入准备基础层和 profile 8.1 RPU 供编码�
 实际 x265 支持 RPU 输入，且当前行已有 VBV 和母版显示参数时，Dolby Vision 使用原生写入；否则或原生产物验证失败时，使用 `dovi_tool` 注入，不改变码率控制。
 
 同时包含 HDR10+ 与 Dolby Vision 时，若两条原生路径均满足条件，x265 会在同一次压制中写入两者。最后一次注入后、最终混流前，程序会检查 HEVC 中的两种元数据。
+
+硬件压制使用 10 位 HEVC 保留 HDR10+ 和 Dolby Vision，并将兼容的 HDR10 母版显示和亮度元数据写入 Matroska 视频轨。编码后，`dovi_tool` 和 `hdr10plus_tool` 分别向临时 HEVC 注入相应元数据。新码流通过校验并确认已有的 Dolby Vision 元数据仍在后，才会替换上一份码流。
+
+所选输出无法保留全部来源 HDR 元数据时，程序仍按所选设置继续压制。例如，8 位输出会省略自动写入的母版显示和亮度元数据。完成报告会列出省略项。元数据工具处理失败时也会留下诊断报告并保留有效的编码视频。
 
 自动裁剪改变编码尺寸时，程序会按实际裁剪值调整每个 Dolby Vision L5 有效画面 preset，再把所得 Profile 8.1 RPU 交给 x265 原生写入或后注入。因此，手工提供 RPU 不能与自动裁剪同时使用。HDR10+ 在此流程中没有对应的裁剪偏移编辑：程序保留来源亮度统计，不在裁剪后重新测量。
 

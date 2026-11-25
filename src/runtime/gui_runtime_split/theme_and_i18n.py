@@ -212,7 +212,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     subtitle_box = 'QGroupBox[subtitlePathBox="true"]'
     encode_box = 'QGroupBox#encodeBox'
     command_edit = 'QPlainTextEdit#discCommandEdit'
-    encode_params = f'{encode_box} > QPlainTextEdit'
+    encode_params = 'QPlainTextEdit#encodeParametersEdit'
     tab_bar = 'QTabBar#functionTabbar,QDialog QTabBar'
     tab = 'QTabBar#functionTabbar::tab,QDialog QTabBar::tab'
     toggle = 'QTableWidget QToolButton[checkable="true"]'
@@ -259,6 +259,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{{border-bottom-color:{focus};}}',
         _table_stylesheet(('QTableWidget',), *table_colors, table_selection, text),
         f'{section},{subtitle_box},QDialog QGroupBox{{border:1px solid {edge};border-radius:8px;}}'
+        f'QGroupBox#encodeDeviceBox{{margin-top:0;border:1px solid {edge};border-radius:6px;background:transparent;}}'
         f'{section},QDialog QGroupBox{{margin-top:0.65em;}}'
         f'{subtitle_box}{{margin-top:0;}}'
         f'{section},{subtitle_box},{subtitle_box} > QLineEdit{{background:{section_background};}}'
@@ -280,7 +281,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{command_edit},{encode_params},QDialog QPlainTextEdit{{color:{text};'
         f'border:1px solid {edge};border-radius:5px;padding:3px;}}'
         f'{command_edit},{encode_params}{{background:{tinted_editor_background};border-color:{table_colors[3]};}}'
-        f'{command_edit}:enabled{{border-color:{control_edge};}}'
+        f'{command_edit}:enabled,{encode_params}:enabled{{border-color:{control_edge};}}'
         f'{command_edit}:disabled,{encode_params}:disabled'
         f'{{background:{tinted_editor_disabled_background};color:{muted_text};}}'
         f'QDialog QPlainTextEdit{{background:{editor};}}'
@@ -788,6 +789,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
     def _translate_widget_texts(self):
         tooltip_catalog = I18N_ZH_TO_EN if self._language_code == 'en' else I18N_EN_TO_ZH
         for widget in self.findChildren(QWidget):
+            if widget.property('encodeDeviceName'):
+                continue
             source = widget.property('toolTipSource')
             tooltip = widget.toolTip()
             # Unmarked tooltips can contain file paths. Only translate a complete catalog entry.
@@ -795,6 +798,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 widget.setToolTip(self.t(source or tooltip))
             if isinstance(widget, DiscCommandEdit):
                 widget.setAccessibleName(self.t('remux cmd'))
+            if widget.objectName() == 'encodeParametersEdit':
+                widget.setAccessibleName(self.t('Encoder parameters'))
             if widget.objectName() == 'mainPlaylistToggle':
                 name = self.t('main')
                 widget.setToolTip(name)
@@ -835,7 +840,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                     continue
                 widget.blockSignals(True)
                 try:
-                    for i in range(widget.count()):
+                    builtin_count = widget.property('encodePresetBuiltinCount')
+                    for i in range(widget.count() if builtin_count is None else builtin_count):
                         widget.setItemText(i, self.t(widget.itemText(i)))
                 finally:
                     widget.blockSignals(False)
@@ -948,6 +954,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             'chapters': 'Chapters',
             'm2ts_timing': 'M2TS timing',
             'play': 'play',
+            'video_encode_device': 'Video encoding device',
         }
         return [self.t(header_text.get(key, key.replace('_', ' '))) for key in keys]
 
@@ -967,10 +974,6 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             table1.horizontalHeader().setFixedHeight(table1.fontMetrics().height() + 10)
             self._resize_table_columns_for_language(table1)
             self._scroll_table_to_primary_column(table1)
-        self._resize_encode_tool_combos()
         duration = getattr(self, 'approx_episode_minutes_combo', None)
         if duration is not None:
             self._adjust_combo_width_to_contents(duration, padding=54, min_width=120, max_width=220)
-        params = getattr(self, 'x265_params_edit', None)
-        if params is not None:
-            params.setFixedHeight(max(96, params.fontMetrics().lineSpacing() * 3 + 16))

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.core.app_config import (
+    GpuEncodePreferences,
     PathPreferences,
     UiPreferences,
     UserEncodePreset,
@@ -19,10 +20,38 @@ from src.core.app_config import (
     load_app_config,
     save_app_config,
 )
+from src.core.encode_presets import UserGpuEncodePreset
 from src.core.tool_paths import TOOL_PATH_NAMES, require_tool_path, resolve_tool_paths, using_tool_paths
 
 
 class AppConfigTests(unittest.TestCase):
+    def test_gpu_encoding_requires_explicit_opt_in(self) -> None:
+        self.assertFalse(app_config_from_mapping({"encode": {"cpu_enabled": False}}).encode.gpu_enabled)
+        self.assertTrue(app_config_from_mapping({"encode": {"gpu_enabled": True}}).encode.gpu_enabled)
+
+    def test_custom_gpu_presets_round_trip_by_device_and_mode(self) -> None:
+        legacy = app_config_from_mapping({"encode": {"gpu_devices": [{
+            "device": "nvenc:0", "enabled": True, "parameters": "-cq 20",
+        }]}}).encode.gpu_devices[0]
+        self.assertEqual(legacy, GpuEncodePreferences("nvenc:0", True, parameters="-cq 20"))
+
+        devices = (
+            replace(legacy, preset="Film", parameters=None, custom_presets=(
+                UserGpuEncodePreset("hevc", "Film", "-cq 18", "10"),
+                UserGpuEncodePreset("hevc", "Film", "-cq 21", "8"),
+                UserGpuEncodePreset("av1", "Film", "-cq 24", "10"),
+            )),
+            GpuEncodePreferences("qsv:1", preset="Film", custom_presets=(
+                UserGpuEncodePreset("hevc", "Film", "-global_quality 19", "10"),
+            )),
+        )
+        config = default_app_config()
+        config = replace(config, encode=replace(config.encode, gpu_devices=devices))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "config.json"
+            save_app_config(config, target)
+            self.assertEqual(load_app_config(target).encode.gpu_devices, devices)
+
     def test_missing_config_is_created_from_packaged_template(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

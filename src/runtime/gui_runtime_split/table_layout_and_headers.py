@@ -127,8 +127,23 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
 
+    def _apply_encode_device_column_visibility(self, table: QTableWidget) -> None:
+        keys = table.property('columnKeys') or ()
+        if 'video_encode_device' in keys:
+            column = keys.index('video_encode_device')
+            controls = getattr(self, 'encode_device_controls', None)
+            show_device = self.get_selected_function_id() == 4 and controls is not None and controls.gpu_enabled
+            table.setColumnHidden(column, not show_device)
+            if show_device:
+                header = table.horizontalHeader()
+                output_position = header.visualIndex(keys.index('output_name'))
+                device_position = header.visualIndex(column)
+                header.moveSection(device_position, output_position + int(device_position > output_position))
+                table.setColumnWidth(column, max(180, table.columnWidth(column)))
+
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
         table.setProperty('columnKeys', list(keys))
+        self._apply_encode_device_column_visibility(table)
         disc_table = table is getattr(self, 'table1', None)
         sp_selection_row = getattr(self, '_sp_selection_row', None)
         if table is getattr(self, 'table3', None) and sp_selection_row is not None:
@@ -263,6 +278,11 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                 width = max(minimum, min(360, max(220, width)))
             elif key == 'vpy_path':
                 width = max(minimum, 300)
+            elif key == 'video_encode_device' and not table.isColumnHidden(column):
+                width = max(minimum, 180, max((
+                    combo.sizeHint().width() for row in range(table.rowCount())
+                    if isinstance((combo := table.cellWidget(row, column)), QComboBox)
+                ), default=0))
             elif key in ('m2ts_file', 'm2ts_file_detail'):
                 width = max(minimum, min(280, width))
             elif key == 'remux_cmd':
@@ -372,10 +392,22 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         else:
             title = self.t('Main outputs')
             description = self.t('One row per main output. Adjust chapter ranges, output names and optional subtitles.')
+        controls = getattr(self, 'encode_device_controls', None)
+        if function_id == 4 and controls is not None and controls.gpu_enabled:
+            description += ' ' + self.t(
+                'Assign each video to a device. Different devices can encode at the same time.'
+            )
         self.table2_section.setTitle(title)
         self.table2_description.setText(description)
 
     def _set_table_column_visual_order(self, table: QTableWidget, order: list[int]):
+        keys = table.property('columnKeys') or ()
+        if 'video_encode_device' in keys and 'output_name' in keys:
+            device = keys.index('video_encode_device')
+            output = keys.index('output_name')
+            if device in order and output in order:
+                order = [column for column in order if column != device]
+                order.insert(order.index(output) + 1, device)
         header = table.horizontalHeader()
         for desired_visual_index, logical_index in enumerate(order):
             if logical_index < 0 or logical_index >= table.columnCount():

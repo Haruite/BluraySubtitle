@@ -14,8 +14,20 @@
 | MVC | AVC 立体扩展：基础视图加依赖视图，可通过扩展／子路径寻址 |
 | HEVC / H.265 | UHD 蓝光主要编码，常见 10-bit 4:2:0 及 Rec. 2020／HDR 信令 |
 | AV1 | 项目通过 SVT-AV1 提供的压制目标，不是这里的 BDMV／UHD-BD 来源编码 |
+| [FFV1](#ffv1) | 用于归档和中间文件的无损视频编码 |
+| [Apple ProRes](#apple-prores) | 用于剪辑和后期制作的高画质视频编码 |
 
 编码名称标识位流，x264、x265、SVT-AV1 则是编码器实现。输出位深、兼容性及 Dolby Vision 限制见[编码器选择](Video-Encoding-and-VapourSynth.zh-Hans.md#选择-h264h265-还是-av1)。
+
+### FFV1
+
+FFV1 是一种无损帧内编码。解码能精确还原送入编码器的像素样本，适合归档视频，或保存经过处理的中间文件供后续使用。在 BluraySubtitle 中，无损保存的对象是经过滤镜处理和像素格式转换后送入编码器的画面。 [FFV1 规范（RFC 9043）](https://www.rfc-editor.org/rfc/rfc9043.html)
+
+### Apple ProRes
+
+Apple ProRes 是一组面向剪辑和后期制作的有损帧内编码。每帧可独立解码，便于定位和拖动预览。10 位 ProRes 422 系列采用 4:2:2 色度抽样，按目标码率从低到高分为 Proxy、LT、422 和 HQ。ProRes 4444 和 4444 XQ 采用全分辨率 4:4:4 色度，每个图像分量最高 12 位，并可携带 Alpha 通道。XQ 的目标码率高于 4444。 [Apple ProRes 白皮书](https://www.apple.com/final-cut-pro/docs/Apple_ProRes.pdf)
+
+BluraySubtitle 按[视频压制设备](Video-Encoding-and-VapourSynth.zh-Hans.md#视频压制设备)列出可用的 FFV1 和 ProRes 组合。
 
 ### 像素格式不等于编解码格式
 

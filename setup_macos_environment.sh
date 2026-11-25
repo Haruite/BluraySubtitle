@@ -67,7 +67,7 @@ python=$("$uv" python find --managed-python 3)
 "$uv" pip install --python "$cache/build-tools/bin/python" --upgrade \
     aqtinstall cmake ninja Cython meson-python packaging pip setuptools wheel
 deps=(zimg zlib libass freetype libpng expat harfbuzz fribidi fontconfig fftw xxhash gmp libboost-devel fmt pugixml libflac libogg libvorbis dav1d-devel libopus
-      libplacebo shaderc libvulkan-headers docbook-xsl gettext-tools ruby autoconf automake libtool nasm pkg-config ispc)
+      libplacebo shaderc libvulkan-headers libvulkan-loader docbook-xsl gettext-tools ruby autoconf automake libtool nasm pkg-config ispc)
 operation=create
 if [[ -f "$cache/deps/conda-meta/history" ]]; then operation=install; fi
 "$mamba" "$operation" --yes --platform "$subdir" --override-channels -c conda-forge \

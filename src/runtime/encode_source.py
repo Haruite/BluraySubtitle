@@ -401,6 +401,8 @@ def build_automatic_encoder_metadata_arguments(
         source: ActualEncodeSource,
         encoder: str,
         manual_arguments: Sequence[str],
+        *,
+        include_static_hdr: bool = True,
 ) -> tuple[str, ...]:
     """Build supported metadata arguments without overriding manual options."""
     normalized_encoder = str(encoder or '').strip().lower()
@@ -467,6 +469,8 @@ def build_automatic_encoder_metadata_arguments(
             '--chromaloc',
             _X26X_CHROMA_LOCATIONS.get(metadata.chroma_location or ''),
         )
+        if not include_static_hdr:
+            return tuple(arguments)
         if normalized_encoder == 'x264':
             add_option(
                 '--mastering-display',
@@ -504,8 +508,9 @@ def build_automatic_encoder_metadata_arguments(
             '--chroma-sample-position',
             _SVT_CHROMA_LOCATIONS.get(metadata.chroma_location or ''),
         )
-        add_option('--mastering-display', metadata.mastering_display_svt)
-        add_option('--content-light', metadata.content_light_level)
+        if include_static_hdr:
+            add_option('--mastering-display', metadata.mastering_display_svt)
+            add_option('--content-light', metadata.content_light_level)
     return tuple(arguments)
 
 
@@ -973,7 +978,30 @@ def verify_final_video_metadata(
             )
 
 
-def inject_hdr10plus_metadata(encoded_path: str, metadata_path: str) -> None:
+def matroska_static_hdr_arguments(metadata: SourceColorMetadata | None) -> list[str]:
+    """Preserve mastering display and light levels even if a hardware encoder omits SEI."""
+    if metadata is None:
+        return []
+    arguments = []
+    if metadata.mastering_display_svt:
+        fields = dict(re.findall(r'([A-Z]+)\(([^)]+)\)', metadata.mastering_display_svt))
+        maximum, minimum = fields['L'].split(',')
+        coordinates = ','.join(fields[name] for name in ('R', 'G', 'B'))
+        arguments.extend((
+            '--chromaticity-coordinates', f'0:{coordinates}',
+            '--white-color-coordinates', f'0:{fields["WP"]}',
+            '--max-luminance', f'0:{maximum}',
+            '--min-luminance', f'0:{minimum}',
+        ))
+    if metadata.content_light_level:
+        content_light, frame_light = metadata.content_light_level.split(',')
+        arguments.extend(('--max-content-light', f'0:{content_light}', '--max-frame-light', f'0:{frame_light}'))
+    return arguments
+
+
+def inject_hdr10plus_metadata(
+        encoded_path: str, metadata_path: str, *, dolby_vision_frames: int | None = None,
+) -> None:
     """Inject and verify HDR10+ metadata before atomically replacing the HEVC stream."""
     executable = require_tool_path("HDR10PLUS_TOOL_PATH")
     encoded_path = os.path.abspath(os.path.normpath(encoded_path))
@@ -1016,6 +1044,10 @@ def inject_hdr10plus_metadata(encoded_path: str, metadata_path: str) -> None:
             ).format(path=encoded_path)
         )
     verify_hdr10plus_metadata(temporary_output)
+    if dolby_vision_frames is not None:
+        from src.runtime.dolby_vision import verify_dolby_vision_rpu
+
+        verify_dolby_vision_rpu(temporary_output, dolby_vision_frames, 8)
     os.replace(temporary_output, encoded_path)
 
 

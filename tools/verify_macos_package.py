@@ -76,6 +76,12 @@ def verify_runtime(runtime):
                 raise RuntimeError(f"{name} {args} exited {result.returncode}: {result.stdout[-4500:]}")
             return result.stdout
 
+        encoders = {line.split()[1] for line in execute("ffmpeg", "-hide_banner", "-encoders").splitlines()
+                    if line.strip().startswith("V") and len(line.split()) > 1}
+        if not {"h264_videotoolbox", "hevc_videotoolbox", "prores_videotoolbox", "ffv1_vulkan"} <= encoders:
+            raise ValueError("FFmpeg is missing VideoToolbox or Vulkan encoders")
+        if execute("bluraysub-gpu-capabilities", "--version").strip() != "2":
+            raise ValueError("The packaged GPU capability query failed its version check")
         info = execute("vspipe", "--version")
         if "Core R79" not in info or "API R3" not in info:
             raise ValueError(info)

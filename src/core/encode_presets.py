@@ -54,6 +54,21 @@ class UserEncodePreset:
     name: str
     parameters: str
 
+    @property
+    def scope(self) -> tuple[str, str | None]:
+        return self.encoder, None
+
+
+@dataclass(frozen=True)
+class UserGpuEncodePreset(UserEncodePreset):
+    """A device preset whose encoder field holds a codec ID."""
+
+    bit_depth: str
+
+    @property
+    def scope(self) -> tuple[str, str | None]:
+        return self.encoder, self.bit_depth
+
 
 def encode_presets_for_encoder(
         encoder: str,
@@ -87,6 +102,7 @@ __all__ = [
     "ENCODE_PRESET_NAMES",
     "ENCODE_PRESET_PARAMETERS",
     "UserEncodePreset",
+    "UserGpuEncodePreset",
     "encode_preset_parameters",
     "encode_presets_for_encoder",
 ]

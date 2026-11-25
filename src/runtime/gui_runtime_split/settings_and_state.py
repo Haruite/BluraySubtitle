@@ -30,7 +30,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             ),
         )
 
-    def _apply_saved_encode_defaults(self) -> None:
+    def _apply_saved_encode_devices(self) -> None:
         encode = self._app_config.encode
         tool_text = {
             "x264": "x264",
@@ -53,10 +53,16 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         self._encode_setting_updating = True
         try:
             self.x265_params_edit.setPlainText(
-                self._encode_preset_params.get(encode.preset, "")
+                encode.cpu_parameters if encode.cpu_parameters is not None
+                else self._encode_preset_params.get(encode.preset, "")
             )
         finally:
             self._encode_setting_updating = False
+        self.encode_device_controls.restore(encode)
+
+    def _apply_saved_encode_defaults(self) -> None:
+        self._apply_saved_encode_devices()
+        encode = self._app_config.encode
         self._set_combo_value(
             self.encode_lossless_audio_combo,
             encode.lossless_audio_codec,
@@ -86,6 +92,10 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         subtitle_radio.setChecked(True)
         self.remux_flac_checkbox.setChecked(
             self._app_config.remux.convert_lossless_audio_to_flac
+        )
+        self.encode_device_controls.refresh(
+            self._resolved_tool_paths.get("FFMPEG_PATH", ""),
+            self._resolved_tool_paths.get("FFPROBE_PATH", ""),
         )
 
     def _remember_output_folder_for_function(self, function_id: int) -> None:
@@ -229,10 +239,27 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             tools_changed = self._resolved_tool_paths != resolved_tools
             self._resolved_tool_paths = resolved_tools
             active_tool_paths.set(resolved_tools)
+            current_preset = self.x265_preset_combo.currentData()
+            refresh_cpu_parameters = (
+                selected.encode.custom_presets != previous.encode.custom_presets
+                and self.x265_params_edit.toPlainText() == self._encode_preset_params.get(current_preset)
+            )
             if selected.encode != previous.encode:
                 self._reload_encode_preset_parameters()
             if selected.encode != previous.encode or tools_changed:
-                self._refresh_encode_tool_dependent_ui(False)
+                self._refresh_encode_tool_dependent_ui(refresh_cpu_parameters)
+            if any(getattr(selected.encode, name) != getattr(previous.encode, name) for name in (
+                "encoder", "bit_depth", "preset", "cpu_enabled", "cpu_parameters",
+            )):
+                self._apply_saved_encode_devices()
+            elif selected.encode.gpu_devices != previous.encode.gpu_devices:
+                self.encode_device_controls.restore(selected.encode)
+            elif selected.encode.gpu_enabled != previous.encode.gpu_enabled:
+                self.encode_device_controls.set_gpu_enabled(selected.encode.gpu_enabled)
+            ffmpeg, ffprobe = resolved_tools.get("FFMPEG_PATH", ""), resolved_tools.get("FFPROBE_PATH", "")
+            detected = dialog.detected_gpu_devices(ffmpeg, ffprobe)
+            if detected is not None or tools_changed or selected.encode.gpu_enabled != previous.encode.gpu_enabled:
+                self.encode_device_controls.refresh(ffmpeg, ffprobe, detected=detected)
             for function_id, old_path, new_path in (
                 (3, previous.paths.remux_output, selected.paths.remux_output),
                 (4, previous.paths.encode_output, selected.paths.encode_output),
@@ -257,6 +284,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             apply_config=apply_config,
             start_update=self._start_program_update,
         )
+        dialog.encode_device_controls.set_devices(self.encode_device_controls.devices)
+        self.encode_device_controls.devices_changed.connect(dialog.encode_device_controls.set_devices)
         self._apply_window_opacity(dialog)
         dialog.exec()
         dialog.deleteLater()

@@ -196,6 +196,8 @@ for setting_name, description in (
     ("TS_MUXER_PATH", "tsMuxeR"),
 ):
     add_binary(binaries, SETTINGS[setting_name], description)
+if not compat_root:
+    add_binary(binaries, Path(SETTINGS["FFMPEG_PATH"]).with_name("bluraysub-gpu-capabilities.exe"), "GPU capability query")
 
 # 7z.exe loads archive handlers from its adjacent DLL.
 add_binary(binaries, Path(SETTINGS["SEVEN_ZIP_PATH"]).parent / "7z.dll", "7-Zip archive library")

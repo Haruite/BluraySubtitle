@@ -5,6 +5,8 @@ Supports both:
 - `python src/main.py`
 """
 
+from __future__ import annotations
+
 from contextlib import suppress
 import multiprocessing
 import os
@@ -72,6 +74,16 @@ def _launch_detached(arguments: list[str]) -> int:
 
 
 def main() -> None:
+    if sys.platform == "darwin" and sys.version_info < (3, 10):
+        runtime = Path.home() / "Library/Application Support/BluraySubtitle/Runtime"
+        python = runtime / "python/bin/python3"
+        if (getattr(sys, "_bluray_macos_runtime", None) or not (runtime / "runtime.json").is_file()
+                or not os.access(python, os.X_OK)):
+            raise SystemExit(f"BluraySubtitle: Python {sys.version.split()[0]} < 3.10\n./setup_macos_environment.sh")
+        # Use this checkout with the Python and Qt installed by the macOS setup script.
+        entry = Path(__file__).resolve().parents[1] / "tools/macos_entry.py"
+        os.execv(python, [str(python), "-I", "-B", str(entry), "--detach", *sys.argv[1:]])
+
     from src.runtime.application_log import ApplicationLog, prepare_windows_stdio
 
     arguments = sys.argv[1:]

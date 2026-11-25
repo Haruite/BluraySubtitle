@@ -11,10 +11,12 @@ import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.core.tool_paths import default_tool_paths, using_tool_paths
+from src.core.tool_paths import default_tool_paths, tool_path, using_tool_paths
 from src.exports.utils import terminate_process_trees
+from src.runtime import dolby_vision
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.encode_results import (
     EncodeBatchResult,
@@ -22,6 +24,8 @@ from src.runtime.encode_results import (
     EncodeTaskFailure,
 )
 from src.runtime.encode_source import ActualEncodeSource
+from src.runtime import hardware_encode
+from src.runtime.hardware_encode import GpuEncodeDevice, VideoEncodeChoice, hardware_encode_command
 from src.runtime.video_timeline import VideoTimeline
 from src.runtime import TaskCancelled
 from src.runtime.services_split.encode_and_audio_tasks import EncodeAudioTasksMixin
@@ -122,6 +126,59 @@ class _PipelineService(EncodeAudioTasksMixin):
 
 
 class EncodeWorkflowTests(unittest.TestCase):
+    def test_windows_arm64_trials_match_vulkan_to_the_nvidia_adapter(self) -> None:
+        nvenc = GpuEncodeDevice('nvidia', 'NVIDIA', 'nvenc', 'd3d11va', '0', hardware_id='luid:01')
+        qsv = GpuEncodeDevice('intel', 'Intel', 'qsv', 'd3d11va', '1', hardware_id='luid:02')
+        listed = b' V..... hevc_nvenc\n V..... h264_nvenc\n V..... hevc_mf\n V..... hevc_qsv\n V..... ffv1_vulkan\n'
+
+        def run(args, **kwargs):
+            if args[1:] == ['nvenc', '0']:
+                output = b'hevc 8\nvvc 10\n'
+            elif args[1:] == ['--list-vulkan']:
+                output = (b'8086\t00000000000000000000000000000002\tluid:02\t8,10\tIntel\n'
+                          b'10de\t00000000000000000000000000000001\tluid:01\t10,12\tNVIDIA\n')
+            elif '-encoders' in args:
+                output = listed
+            elif '-h' in args:
+                output = b''
+            else:
+                self.fail(f'Unexpected GPU probe command: {args}')
+            return subprocess.CompletedProcess(args, 0, output, b'')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'bluraysub-gpu-capabilities.exe').touch()
+            with (
+                patch.object(hardware_encode, 'sys', SimpleNamespace(platform='win32')),
+                patch.object(hardware_encode, '_windows_arm64', return_value=True),
+                patch.object(hardware_encode, '_windows_adapters', return_value=[nvenc, qsv]),
+                patch.object(hardware_encode, 'run_command', side_effect=run),
+                patch.object(hardware_encode, '_verify_hardware_preset', return_value=(True, {})) as verify,
+            ):
+                devices = hardware_encode.discover_gpu_encoders(str(root / 'ffmpeg.exe'), str(root / 'ffprobe.exe'))
+
+        device, = devices
+        self.assertEqual((device.key, device.formats), ('nvidia', (('hevc', '8'), ('ffv1', '10'), ('ffv1', '12'))))
+        self.assertEqual([call.args[2].device.key for call in verify.call_args_list], ['nvidia'] * 7)
+        presets = hardware_encode.gpu_presets(device, 'ffv1', '12')
+        self.assertEqual(set(presets), {'Fast', 'Balanced'})
+        choice = VideoEncodeChoice('ffv1', '12', presets['Balanced'], device)
+        command = hardware_encode_command('ffmpeg', choice, ['-i', 'pipe:0'], ['-f', 'matroska', 'output.mkv'])
+        self.assertEqual(command[command.index('-init_hw_device') + 1], 'vulkan=encode:00000000-0000-0000-0000-000000000001')
+        self.assertEqual(command[command.index('-c:v') + 1], 'ffv1_vulkan')
+
+    def test_prores_hardware_command_selects_12_bit_4444(self) -> None:
+        device = GpuEncodeDevice('macos', 'VideoToolbox', 'videotoolbox')
+        choice = VideoEncodeChoice('prores', '12', '-profile:v xq', device)
+        command = hardware_encode_command(
+            'ffmpeg', choice, ['-i', 'pipe:0'], ['-f', 'matroska', 'output.mkv'],
+            metadata_args=('--chromaloc', '2'),
+        )
+        self.assertEqual(command[command.index('-c:v') + 1], 'prores_videotoolbox')
+        self.assertEqual(command[command.index('-vf') + 1], 'format=ayuv64le')
+        self.assertEqual(command[command.index('-profile:v') + 1], 'xq')
+        self.assertNotIn('-bsf:v', command)
+
     def setUp(self) -> None:
         vpy_probe = patch(
             'src.runtime.services_split.encode_and_audio_tasks.probe_vapoursynth_output_metadata',
@@ -129,6 +186,42 @@ class EncodeWorkflowTests(unittest.TestCase):
         )
         self.vpy_probe = vpy_probe.start()
         self.addCleanup(vpy_probe.stop)
+
+    def test_dolby_vision_profile_7_uses_a_container_for_base_layer_decoding(self) -> None:
+        def run_tool(command, **_kwargs):
+            if command[0] == 'MKV_EXTRACT_PATH':
+                destination = command[-1].split(':', 1)[1]
+            else:
+                destination = command[command.index('-o') + 1]
+            Path(destination).write_bytes(b'output')
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+                tempfile.TemporaryDirectory() as temporary_directory,
+                patch.object(dolby_vision, 'require_tool_path', side_effect=lambda name: name),
+                patch.object(dolby_vision, 'run_command', side_effect=run_tool) as run_command,
+                patch.object(dolby_vision, 'inspect_dolby_vision', return_value=(7, 'FEL')),
+        ):
+            source = Path(temporary_directory, 'source.mkv')
+            source.write_bytes(b'source')
+            plan = dolby_vision.prepare_dolby_vision_encode(
+                str(source), 0, temporary_directory, default_duration_ns=41708333,
+            )
+            mux_command, = [call.args[0] for call in run_command.call_args_list if call.args[0][0] == 'MKV_MERGE_PATH']
+            self.assertEqual(Path(plan.base_layer_path).suffix, '.mkv')
+            self.assertTrue(Path(plan.base_layer_path).is_file())
+            self.assertEqual(mux_command[mux_command.index('-o') + 1], plan.base_layer_path)
+            self.assertEqual(mux_command[mux_command.index('--default-duration') + 1], '0:41708333ns')
+            self.assertTrue(plan.fel_residual_discarded)
+
+    def test_hardware_hevc_signals_the_vpy_chroma_location_in_the_bitstream(self) -> None:
+        device = GpuEncodeDevice('gpu0', 'GPU', 'nvenc')
+        command = hardware_encode_command(
+            'ffmpeg', VideoEncodeChoice('hevc', '10', '', device),
+            ['-i', 'pipe:0'], ['-f', 'hevc', 'output.hevc'],
+            metadata_args=('--chromaloc', '2'),
+        )
+        self.assertEqual(command[command.index('-bsf:v') + 1], 'hevc_metadata=chroma_sample_loc_type=2')
 
     def test_sp_copy_failure_retains_partial_data_and_never_deletes_a_collision(self) -> None:
         for collision in (False, True):
@@ -302,31 +395,30 @@ class EncodeWorkflowTests(unittest.TestCase):
             )
             existing = Path(rows[0].output_path)
             existing.write_bytes(b'existing')
-            with patch('src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths', return_value=None):
-                service = _RowEncodeService()
-                service._encode_mkv_rows(request, rows, [], threading.Event())
-                self.assertEqual(existing.read_bytes(), b'existing')
-                self.assertEqual(Path(rows[1].output_path).read_bytes(), b'encoded')
-                self.assertEqual(service.encode_calls, [(rows[1].source_path, rows[1].output_path)])
+            service = _RowEncodeService()
+            service._encode_mkv_rows(request, rows, [], threading.Event())
+            self.assertEqual(existing.read_bytes(), b'existing')
+            self.assertEqual(Path(rows[1].output_path).read_bytes(), b'encoded')
+            self.assertEqual(service.encode_calls, [(rows[1].source_path, rows[1].output_path)])
 
-                for mode, payload in (('remux', b''), ('bdmv', b'existing')):
-                    with self.subTest(mode=mode):
-                        existing.write_bytes(payload)
-                        service = _RowEncodeService()
-                        with self.assertRaises(FileExistsError):
-                            service._encode_mkv_rows(
-                                replace(request, input_mode=mode), rows, [], threading.Event(),
-                            )
-                        self.assertEqual(service.encode_calls, [])
-                        self.assertEqual(existing.read_bytes(), payload)
+            for mode, payload in (('remux', b''), ('bdmv', b'existing')):
+                with self.subTest(mode=mode):
+                    existing.write_bytes(payload)
+                    service = _RowEncodeService()
+                    with self.assertRaises(FileExistsError):
+                        service._encode_mkv_rows(
+                            replace(request, input_mode=mode), rows, [], threading.Event(),
+                        )
+                    self.assertEqual(service.encode_calls, [])
+                    self.assertEqual(existing.read_bytes(), payload)
 
-                missing_row = replace(rows[1], output_path=str(output_folder / 'Missing.mkv'))
-                service = _RowEncodeService(create_outputs=False)
-                result = service._encode_mkv_rows(
-                    replace(request, main_rows=(missing_row,)), [missing_row], [], threading.Event(),
-                )
-                self.assertEqual(result.rows[0].status, 'failed')
-                self.assertFalse(Path(missing_row.output_path).exists())
+            missing_row = replace(rows[1], output_path=str(output_folder / 'Missing.mkv'))
+            service = _RowEncodeService(create_outputs=False)
+            result = service._encode_mkv_rows(
+                replace(request, main_rows=(missing_row,)), [missing_row], [], threading.Event(),
+            )
+            self.assertEqual(result.rows[0].status, 'failed')
+            self.assertFalse(Path(missing_row.output_path).exists())
 
     def test_row_failure_retains_artifacts_and_continues_later_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -360,15 +452,12 @@ class EncodeWorkflowTests(unittest.TestCase):
                 failing_outputs=(str(first_output),),
             )
 
-            with patch(
-                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
-                    return_value=None):
-                result = service._encode_mkv_rows(
-                    request,
-                    list(rows),
-                    [],
-                    threading.Event(),
-                )
+            result = service._encode_mkv_rows(
+                request,
+                list(rows),
+                [],
+                threading.Event(),
+            )
 
             self.assertEqual(
                 [row.status for row in result.rows],
@@ -381,6 +470,56 @@ class EncodeWorkflowTests(unittest.TestCase):
             report_text = Path(result.rows[0].report_path).read_text(encoding='utf-8')
             self.assertIn('simulated encoder failure', report_text)
             self.assertIn(result.rows[0].artifact_paths[0], report_text)
+
+    def test_rows_on_distinct_devices_run_concurrently_with_their_captured_parameters(self) -> None:
+        ready = threading.Barrier(3, timeout=3)
+        seen = {}
+
+        class ConcurrentService(_RowEncodeService):
+            def encode_task(self, output_file, vpy_path, parameters, _subtitle_mode, **options):
+                seen[output_file] = (
+                    parameters, options['encoder'], options['bit_depth'],
+                    options['hardware_device'], tool_path('FFMPEG_PATH'),
+                )
+                script = Path(vpy_path)
+                if script == original_script or script.parent != original_script.parent:
+                    raise AssertionError(f'Unexpected row script: {script}')
+                script.write_text(parameters, encoding='utf-8')
+                ready.wait()
+                if script.read_text(encoding='utf-8') != parameters:
+                    raise AssertionError('Another device modified this row script')
+                Path(output_file).write_bytes(b'encoded')
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = root / 'source'
+            sources.mkdir()
+            output = root / 'output'
+            original_script = root / 'shared.vpy'
+            original_script.write_text('original', encoding='utf-8')
+            paths = [sources / f'{name}.mkv' for name in ('main', 'sp1', 'sp2')]
+            for path in paths:
+                path.write_bytes(b'source')
+            device = GpuEncodeDevice('adapter1', 'GPU', 'nvenc', formats=(('hevc', '10'),))
+            other_device = replace(device, key='adapter2')
+            main, sp, other_sp = (
+                EncodeRow(str(path), str(output / path.name), str(original_script))
+                for path in paths
+            )
+            sp = replace(sp, video_encode=VideoEncodeChoice('hevc', '10', '-preset p5 -cq 22', device))
+            other_sp = replace(other_sp, video_encode=VideoEncodeChoice('hevc', '10', '-preset p3', other_device))
+            request = EncodeRequest('remux', str(sources), str(output), '', (main,), (sp, other_sp), _settings())
+
+            with using_tool_paths(default_tool_paths() | {'FFMPEG_PATH': 'captured-ffmpeg'}):
+                result = ConcurrentService().episodes_encode(request, threading.Event())
+
+            self.assertEqual([row.status for row in result.rows], ['completed'] * 3)
+            self.assertEqual([row.output_path for row in result.rows], [main.output_path, sp.output_path, other_sp.output_path])
+            self.assertEqual(seen[main.output_path], ('--crf 18', 'x265', '10', None, 'captured-ffmpeg'))
+            self.assertEqual(seen[sp.output_path], ('-preset p5 -cq 22', 'hevc', '10', device, 'captured-ffmpeg'))
+            self.assertEqual(seen[other_sp.output_path], ('-preset p3', 'hevc', '10', other_device, 'captured-ffmpeg'))
+            self.assertEqual(original_script.read_text(encoding='utf-8'), 'original')
+            self.assertEqual(list(root.glob('.encode-*.vpy')), [])
 
     @unittest.skipUnless(os.name == 'posix', 'Requires POSIX process groups')
     def test_cancellation_closes_the_output_of_a_wrapped_encoder(self) -> None:
@@ -439,16 +578,13 @@ class EncodeWorkflowTests(unittest.TestCase):
                 cancel_outputs=(str(first_output),),
             )
 
-            with patch(
-                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
-                    return_value=None):
-                with self.assertRaises(TaskCancelled):
-                    service._encode_mkv_rows(
-                        request,
-                        list(rows),
-                        [],
-                        threading.Event(),
-                    )
+            with self.assertRaises(TaskCancelled):
+                service._encode_mkv_rows(
+                    request,
+                    list(rows),
+                    [],
+                    threading.Event(),
+                )
 
             self.assertEqual(
                 service.encode_calls,

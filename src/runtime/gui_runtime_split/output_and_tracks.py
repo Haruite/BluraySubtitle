@@ -677,6 +677,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         m2ts_col = labels.index('m2ts_file')
         type_col = labels.index('m2ts_type')
         dur_col = labels.index('duration')
+        device_col = labels.index('video_encode_device') if function_id == 4 else -1
         try:
             single_output_movie = bool(self._is_movie_mode() and self.table2.rowCount() == 1)
         except Exception:
@@ -711,6 +712,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             seq = 0
             for r in rows:
                 yield
+                device_combo = self.table3.cellWidget(r, device_col) if device_col >= 0 else None
+                if device_combo is not None:
+                    device_combo.hide()
                 out_item = self.table3.item(r, out_col)
                 if not out_item:
                     out_item = SpOutputNameItem('')
@@ -750,6 +754,8 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         out_item.setData(_SP_EPISODE_OUTPUT_KEY_ROLE, episode_key)
                         path = episode_name
                     out_item.setText(path)
+                    if device_combo is not None:
+                        device_combo.setVisible(episode_name is None and path.lower().endswith('.mkv'))
 
                 if episode_name is None:
                     seq += 1

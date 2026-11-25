@@ -14,6 +14,7 @@ from src.runtime.audio_conversion import (
 )
 from src.runtime.frame_check import frame_check_report_path
 from src.runtime.encode_source import probe_svt_av1_bit_depths
+from src.runtime.hardware_encode import GPU_BACKENDS, VideoEncodeChoice, hardware_encoder_parameters
 from src.runtime.sp import SpEntry
 
 
@@ -39,6 +40,9 @@ class EncodeSettings:
     vpy_antialiasing_strength: float = 0.5
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
 
+    def cpu_encode_choice(self) -> VideoEncodeChoice:
+        return VideoEncodeChoice(self.encoder, self.bit_depth, self.encoder_parameters)
+
 
 @dataclass(frozen=True)
 class EncodeRow:
@@ -58,6 +62,7 @@ class EncodeRow:
     subtitle_tracks: tuple[str, ...] = ()
     audio_codec_choices: tuple[str, ...] = ()
     track_language_overrides: tuple[tuple[str, str], ...] = ()
+    video_encode: VideoEncodeChoice | None = None
 
 
 @dataclass(frozen=True)
@@ -256,6 +261,24 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
 
     for row_number, (row, is_sp_row) in enumerate(selected_rows, 1):
         row_is_checkpoint = is_valid_remux_checkpoint(row)
+        choice = row.video_encode
+        if not row_is_checkpoint and choice is not None:
+            device = choice.device
+            if device is None:
+                supported = choice.encoder in ENCODER_PATH_NAMES and choice.bit_depth in (
+                    ('8', '10') if choice.encoder == 'x264' else ('8', '10', '12')
+                )
+            else:
+                supported = device.backend in GPU_BACKENDS and (choice.encoder, choice.bit_depth) in device.formats
+            if not supported:
+                raise ValueError(translate_text('Unsupported video encoding mode in row {row}').format(row=row_number))
+            if device is not None:
+                try:
+                    hardware_encoder_parameters(choice.parameters)
+                except ValueError as error:
+                    raise ValueError(translate_text('Video encoding parameters in row {row}: {detail}').format(
+                        row=row_number, detail=error,
+                    )) from error
         if len(row.audio_tracks) != len(row.audio_codec_choices):
             raise ValueError(
                 translate_text('Audio codec choices do not match selected tracks in row {row}').format(
@@ -409,17 +432,17 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         require_tool_path("VSPIPE_PATH")
         if tool_path("PLUGIN_PATH"):
             require_tool_path("PLUGIN_PATH")
-        encoder_path = require_tool_path(ENCODER_PATH_NAMES[request.settings.encoder])
-        if (
-                request.settings.encoder == 'svtav1'
-                and request.settings.bit_depth == '12'
-                and '12' not in probe_svt_av1_bit_depths(encoder_path)
-        ):
-            raise ValueError(
-                translate_text(
+        choices = {row.video_encode or request.settings.cpu_encode_choice() for row, _ in pending_video_rows}
+        for encoder, depth in {(choice.encoder, choice.bit_depth) for choice in choices if choice.device is None}:
+            encoder_path = require_tool_path(ENCODER_PATH_NAMES[encoder])
+            if encoder == 'svtav1' and depth == '12' and '12' not in probe_svt_av1_bit_depths(encoder_path):
+                raise ValueError(translate_text(
                     'The selected SVT-AV1 encoder does not advertise 12-bit support: {path}'
-                ).format(path=encoder_path)
-            )
+                ).format(path=encoder_path))
+        if any(choice.device is not None for choice in choices):
+            require_tool_path("FFMPEG_PATH")
+            require_tool_path("FFPROBE_PATH")
+            require_tool_path("MKV_INFO_PATH")
     if pending_matroska_rows:
         require_tool_path("MKV_MERGE_PATH")
         if pending_video_rows:

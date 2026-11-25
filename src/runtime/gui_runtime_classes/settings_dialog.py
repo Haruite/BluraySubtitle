@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QDoubleSpinBox,
@@ -52,13 +53,12 @@ from src.core.app_config import (
 )
 from src.core.encode_presets import (
     ENCODE_PRESET_NAMES,
-    UserEncodePreset,
     encode_presets_for_encoder,
 )
 from src.core.i18n import translate_text
 from src.core.tool_paths import (
     ENCODER_PATH_NAMES, MKVTOOLNIX_TOOLS, TOOL_DIRECTORY_NAMES, TOOL_PATH_NAMES,
-    bundle_directory, resolve_tool_paths, tool_path_exists,
+    bundle_directory, resolve_tool_paths, tool_path_exists, using_tool_paths,
 )
 from src.core.version import (
     APP_VERSION,
@@ -70,6 +70,7 @@ from src.core.version import (
 )
 from src.runtime.desktop_integration import create_launch_shortcut, supports_desktop_entries
 from src.runtime.encode_source import probe_svt_av1_bit_depths
+from src.runtime.hardware_encode import GpuEncodeDevice, gpu_detection_supported, gpu_presets, hardware_encoder_parameters
 from src.runtime.update_check import request_update_info, update_network_manager
 from src.runtime.program_update import (
     DIRECT_UPDATE_REQUIREMENT,
@@ -83,6 +84,8 @@ from src.runtime.program_update import (
 )
 
 from .custom_table_widget import SelectionTableWidget, StyledComboBox
+from .encode_devices import EncodeDeviceControls, GpuProbeThread
+from .encode_preset_editor import validate_custom_preset_names
 from .file_dialog import choose_path
 from .spin_box import StyledDoubleSpinBox, StyledSpinBox
 from .widget_animations import (
@@ -107,15 +110,16 @@ class SettingsDialog(AnimatedDialog):
         self._apply_config = apply_config
         self._start_update = start_update
         self.t = translate
-        self._custom_encode_presets = list(config.encode.custom_presets)
-        self._preset_editor_updating = False
         self._config_path = config_path
         self._configured_tools = config.tools
         self._resolved_tools = resolved_tools
         self._current_commit = current_commit()
         self._update_network_manager = update_network_manager(self)
         self._update_replies: tuple[QNetworkReply, ...] | None = None
+        self._gpu_diagnostic_thread: GpuProbeThread | None = None
+        self._gpu_detection_result: tuple[tuple[str, str], tuple[GpuEncodeDevice, ...]] | None = None
         self.finished.connect(self._cancel_update_check)
+        self.finished.connect(self._cancel_gpu_diagnostic)
         self.setWindowTitle(self.t("Settings"))
         self.setMinimumWidth(680)
         self._initial_size_set = False
@@ -130,28 +134,33 @@ class SettingsDialog(AnimatedDialog):
         tabs.addTab(self._build_tools_tab(), self.t("Tools"))
         tabs.addTab(self._build_external_tools_tab(), self.t("External tools"))
         layout.addWidget(tabs)
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save
-            | QDialogButtonBox.StandardButton.Apply
-            | QDialogButtonBox.StandardButton.Cancel
-            | QDialogButtonBox.StandardButton.RestoreDefaults,
-            self,
-        )
-        self.buttons.button(QDialogButtonBox.StandardButton.Save).setText(self.t("Save"))
-        apply_button = self.buttons.button(QDialogButtonBox.StandardButton.Apply)
-        apply_button.setText(self.t("Apply"))
-        apply_button.clicked.connect(self._apply_settings)
-        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(self.t("Cancel"))
-        self.buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).setText(
-            self.t("Restore defaults")
-        )
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        self.buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(
-            lambda _=None: self._set_controls(default_app_config())
-        )
-        layout.addWidget(self.buttons)
+        self._add_settings_buttons(layout)
         self._set_controls(config)
+
+    def _add_settings_buttons(self, layout: QVBoxLayout) -> None:
+        save = QPushButton(self.t("Save"), self)
+        apply = QPushButton(self.t("Apply"), self)
+        cancel = QPushButton(self.t("Cancel"), self)
+        restore = QPushButton(self.t("Restore defaults"), self)
+        save.clicked.connect(self.accept)
+        apply.clicked.connect(self._apply_settings)
+        cancel.clicked.connect(self.reject)
+        restore.clicked.connect(lambda _=None: self._set_controls(default_app_config()))
+        if sys.platform == "win32":
+            row = QHBoxLayout()
+            row.addWidget(restore)
+            row.addStretch()
+            for button in (save, apply, cancel):
+                row.addWidget(button)
+            save.setDefault(True)
+            layout.addLayout(row)
+        else:
+            box = QDialogButtonBox(self)
+            box.addButton(save, QDialogButtonBox.ButtonRole.AcceptRole)
+            box.addButton(apply, QDialogButtonBox.ButtonRole.ApplyRole)
+            box.addButton(cancel, QDialogButtonBox.ButtonRole.RejectRole)
+            box.addButton(restore, QDialogButtonBox.ButtonRole.ResetRole)
+            layout.addWidget(box)
 
     def showEvent(self, event: QShowEvent) -> None:
         first_show = not event.spontaneous() and not self._initial_size_set
@@ -693,57 +702,44 @@ class SettingsDialog(AnimatedDialog):
         audio_form.addRow(self.allow_partial_missing_non_video_tracks_checkbox)
         layout.addWidget(audio_group)
 
-        encode_group = QGroupBox(self.t("Default encode settings"), tab)
-        encode_form = QFormLayout(encode_group)
-        self.default_encoder_combo = StyledComboBox(encode_group)
+        device_group = QGroupBox(self.t("Video encoding devices"), tab)
+        layout.addWidget(device_group)
+        self.encode_device_controls = EncodeDeviceControls(self.t, device_group, manage_presets=True)
+        device_layout = QVBoxLayout(device_group)
+        self.gpu_enable_checkbox = QCheckBox(self.t("Enable GPU encoding"), device_group)
+        self.gpu_enable_checkbox.setVisible(gpu_detection_supported())
+        self.gpu_enable_checkbox.toggled.connect(self._gpu_encoding_toggled)
+        device_layout.addWidget(self.gpu_enable_checkbox)
+        device_layout.addWidget(self.encode_device_controls)
+        if gpu_detection_supported():
+            controls = QHBoxLayout()
+            self.gpu_detection_button = QPushButton(self.t("Detect GPUs"), device_group)
+            self.gpu_detection_button.setAutoDefault(False)
+            self.gpu_detection_button.clicked.connect(self._detect_gpus)
+            controls.addWidget(self.gpu_detection_button)
+            self.gpu_report_copy_button = QPushButton(self.t("Copy report"), device_group)
+            self.gpu_report_copy_button.setAutoDefault(False)
+            self.gpu_report_copy_button.hide()
+            self.gpu_report_copy_button.clicked.connect(self._copy_gpu_report)
+            controls.addWidget(self.gpu_report_copy_button)
+            controls.addStretch()
+            device_layout.addLayout(controls)
+            self.gpu_detection_report = QPlainTextEdit(device_group)
+            self.gpu_detection_report.setAccessibleName(self.t("GPU detection report"))
+            self.gpu_detection_report.setReadOnly(True)
+            self.gpu_detection_report.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+            self.gpu_detection_report.setMinimumHeight(170)
+            self.gpu_detection_report.hide()
+            device_layout.addWidget(self.gpu_detection_report)
+        cpu_box = self.encode_device_controls.cpu_box
+        self.default_encoder_combo = cpu_box.codec
         self.default_encoder_combo.addItem("x264", "x264")
         self.default_encoder_combo.addItem("x265", "x265")
         self.default_encoder_combo.addItem("SVT-AV1", "svtav1")
-        encode_form.addRow(
-            self.t("Default encoder"),
-            self.default_encoder_combo,
-        )
-        self.default_bit_depth_combo = StyledComboBox(encode_group)
-        encode_form.addRow(
-            self.t("Default bit depth"),
-            self.default_bit_depth_combo,
-        )
-        self.default_preset_combo = StyledComboBox(encode_group)
-        encode_form.addRow(
-            self.t("Default preset"),
-            self.default_preset_combo,
-        )
-
-        preset_editor_row = QWidget(encode_group)
-        preset_editor_layout = QHBoxLayout(preset_editor_row)
-        preset_editor_layout.setContentsMargins(0, 0, 0, 0)
-        preset_editor_layout.setSpacing(4)
-        self.custom_preset_combo = StyledComboBox(preset_editor_row)
-        self.add_custom_preset_button = QPushButton(
-            self.t("Add"),
-            preset_editor_row,
-        )
-        self.delete_custom_preset_button = QPushButton(
-            self.t("Delete"),
-            preset_editor_row,
-        )
-        preset_editor_layout.addWidget(self.custom_preset_combo, 1)
-        preset_editor_layout.addWidget(self.add_custom_preset_button)
-        preset_editor_layout.addWidget(self.delete_custom_preset_button)
-        encode_form.addRow(
-            self.t("Custom encode presets"),
-            preset_editor_row,
-        )
-        self.custom_preset_name_edit = QLineEdit(encode_group)
-        encode_form.addRow(
-            self.t("Preset name"),
-            self.custom_preset_name_edit,
-        )
-        self.custom_preset_parameters_edit = QLineEdit(encode_group)
-        encode_form.addRow(
-            self.t("Custom encode preset parameters"),
-            self.custom_preset_parameters_edit,
-        )
+        self.default_bit_depth_combo = cpu_box.bit_depth
+        self._cpu_preset_editor = cpu_box.preset_editor
+        encode_group = QGroupBox(self.t("Default encode settings"), tab)
+        encode_form = QFormLayout(encode_group)
         self.default_lossless_audio_combo = StyledComboBox(encode_group)
         self.default_lossless_audio_combo.addItem("FLAC", "flac")
         self.default_lossless_audio_combo.addItem("AAC", "aac")
@@ -871,24 +867,6 @@ class SettingsDialog(AnimatedDialog):
         self.default_encoder_combo.currentIndexChanged.connect(
             lambda _=None: self._refresh_advanced_encode_options(True)
         )
-        self.default_preset_combo.currentIndexChanged.connect(
-            lambda _=None: self._select_default_preset_in_editor()
-        )
-        self.custom_preset_combo.currentIndexChanged.connect(
-            lambda _=None: self._load_custom_preset_editor()
-        )
-        self.add_custom_preset_button.clicked.connect(
-            lambda _=None: self._add_custom_encode_preset()
-        )
-        self.delete_custom_preset_button.clicked.connect(
-            lambda _=None: self._delete_custom_encode_preset()
-        )
-        self.custom_preset_name_edit.textEdited.connect(
-            self._edit_custom_preset_name
-        )
-        self.custom_preset_parameters_edit.textEdited.connect(
-            self._edit_custom_preset_parameters
-        )
         layout.addWidget(encode_group)
         layout.addStretch(1)
         scroll.setWidget(content)
@@ -922,228 +900,7 @@ class SettingsDialog(AnimatedDialog):
         finally:
             self.default_bit_depth_combo.blockSignals(False)
         if refresh_presets:
-            self._refill_custom_preset_controls(
-                str(self.default_preset_combo.currentData() or "Balanced")
-            )
-
-    def _refill_custom_preset_controls(
-            self,
-            preferred_default: str,
-            preferred_editor: tuple[str, object] | None = None,
-    ) -> None:
-        encoder = str(self.default_encoder_combo.currentData() or "x265")
-        presets = encode_presets_for_encoder(
-            encoder,
-            self._custom_encode_presets,
-        )
-        self._preset_editor_updating = True
-        self.default_preset_combo.blockSignals(True)
-        self.custom_preset_combo.blockSignals(True)
-        try:
-            self.default_preset_combo.clear()
-            for name in presets:
-                self.default_preset_combo.addItem(
-                    self.t(name) if name in ENCODE_PRESET_NAMES else name,
-                    name,
-                )
-            default_index = self.default_preset_combo.findData(preferred_default)
-            if default_index < 0:
-                default_index = self.default_preset_combo.findData("Balanced")
-            self.default_preset_combo.setCurrentIndex(max(0, default_index))
-
-            self.custom_preset_combo.clear()
-            for name in ENCODE_PRESET_NAMES:
-                self.custom_preset_combo.addItem(
-                    self.t(name),
-                    ("built_in", name),
-                )
-            for index, preset in enumerate(self._custom_encode_presets):
-                if preset.encoder == encoder:
-                    self.custom_preset_combo.addItem(
-                        preset.name,
-                        ("custom", index),
-                    )
-            editor_index = -1
-            if preferred_editor is not None:
-                for index in range(self.custom_preset_combo.count()):
-                    if self.custom_preset_combo.itemData(index) == preferred_editor:
-                        editor_index = index
-                        break
-            if editor_index < 0:
-                selected_name = str(
-                    self.default_preset_combo.currentData() or "Balanced"
-                )
-                for index in range(self.custom_preset_combo.count()):
-                    kind, value = self.custom_preset_combo.itemData(index)
-                    candidate = (
-                        str(value)
-                        if kind == "built_in"
-                        else self._custom_encode_presets[int(value)].name
-                    )
-                    if candidate == selected_name:
-                        editor_index = index
-                        break
-            self.custom_preset_combo.setCurrentIndex(max(0, editor_index))
-        finally:
-            self.custom_preset_combo.blockSignals(False)
-            self.default_preset_combo.blockSignals(False)
-            self._preset_editor_updating = False
-        self._load_custom_preset_editor()
-
-    def _select_default_preset_in_editor(self) -> None:
-        if self._preset_editor_updating:
-            return
-        selected_name = str(self.default_preset_combo.currentData() or "")
-        for index in range(self.custom_preset_combo.count()):
-            kind, value = self.custom_preset_combo.itemData(index)
-            candidate = (
-                str(value)
-                if kind == "built_in"
-                else self._custom_encode_presets[int(value)].name
-            )
-            if candidate == selected_name:
-                self.custom_preset_combo.setCurrentIndex(index)
-                return
-
-    def _load_custom_preset_editor(self) -> None:
-        if self._preset_editor_updating:
-            return
-        data = self.custom_preset_combo.currentData()
-        if not isinstance(data, tuple) or len(data) != 2:
-            return
-        kind, value = data
-        editable = kind == "custom"
-        if editable:
-            preset = self._custom_encode_presets[int(value)]
-            name = preset.name
-            parameters = preset.parameters
-        else:
-            name = self.t(str(value))
-            parameters = encode_presets_for_encoder(
-                str(self.default_encoder_combo.currentData() or "x265")
-            )[str(value)]
-        self._preset_editor_updating = True
-        try:
-            self.custom_preset_name_edit.setText(name)
-            self.custom_preset_parameters_edit.setText(parameters)
-            self.custom_preset_name_edit.setReadOnly(not editable)
-            self.custom_preset_parameters_edit.setReadOnly(not editable)
-            self.custom_preset_parameters_edit.setCursorPosition(0)
-            self.delete_custom_preset_button.setEnabled(editable)
-        finally:
-            self._preset_editor_updating = False
-
-    def _edit_custom_preset_name(self, name: str) -> None:
-        if self._preset_editor_updating:
-            return
-        data = self.custom_preset_combo.currentData()
-        if not isinstance(data, tuple) or data[0] != "custom":
-            return
-        index = int(data[1])
-        previous = self._custom_encode_presets[index]
-        self._custom_encode_presets[index] = replace(previous, name=name)
-        self.custom_preset_combo.setItemText(
-            self.custom_preset_combo.currentIndex(),
-            name,
-        )
-        for combo_index in range(self.default_preset_combo.count()):
-            if self.default_preset_combo.itemData(combo_index) == previous.name:
-                self.default_preset_combo.setItemText(combo_index, name)
-                self.default_preset_combo.setItemData(combo_index, name)
-                break
-
-    def _edit_custom_preset_parameters(self, parameters: str) -> None:
-        if self._preset_editor_updating:
-            return
-        data = self.custom_preset_combo.currentData()
-        if not isinstance(data, tuple) or data[0] != "custom":
-            return
-        index = int(data[1])
-        self._custom_encode_presets[index] = replace(
-            self._custom_encode_presets[index],
-            parameters=parameters,
-        )
-
-    def _add_custom_encode_preset(self) -> None:
-        encoder = str(self.default_encoder_combo.currentData() or "x265")
-        base_name = self.t("New Preset")
-        used_names = {
-            name.casefold()
-            for name in ENCODE_PRESET_NAMES
-        } | {
-            preset.name.casefold()
-            for preset in self._custom_encode_presets
-            if preset.encoder == encoder
-        }
-        name = base_name
-        suffix = 2
-        while name.casefold() in used_names:
-            name = f"{base_name} {suffix}"
-            suffix += 1
-        self._custom_encode_presets.append(UserEncodePreset(
-            encoder=encoder,
-            name=name,
-            parameters=self.custom_preset_parameters_edit.text().strip(),
-        ))
-        self._refill_custom_preset_controls(
-            str(self.default_preset_combo.currentData() or "Balanced"),
-            ("custom", len(self._custom_encode_presets) - 1),
-        )
-        self.custom_preset_name_edit.setFocus()
-        self.custom_preset_name_edit.selectAll()
-
-    def _delete_custom_encode_preset(self) -> None:
-        data = self.custom_preset_combo.currentData()
-        if not isinstance(data, tuple) or data[0] != "custom":
-            return
-        deleted = self._custom_encode_presets.pop(int(data[1]))
-        preferred_default = str(
-            self.default_preset_combo.currentData() or "Balanced"
-        )
-        if preferred_default == deleted.name:
-            preferred_default = "Balanced"
-        self._refill_custom_preset_controls(preferred_default)
-
-    def _custom_preset_validation_error(
-            self,
-    ) -> tuple[str, dict[str, str]] | None:
-        names_by_encoder: dict[str, set[str]] = {
-            "x264": set(),
-            "x265": set(),
-            "svtav1": set(),
-        }
-        built_in_names = {name.casefold() for name in ENCODE_PRESET_NAMES}
-        for preset in self._custom_encode_presets:
-            name = preset.name.strip()
-            if not name:
-                return "Custom encode preset name cannot be empty.", {}
-            normalized_name = name.casefold()
-            if normalized_name in built_in_names:
-                return (
-                    "Custom encode preset name conflicts with a built-in preset: {name}",
-                    {"name": name},
-                )
-            if normalized_name in names_by_encoder[preset.encoder]:
-                return (
-                    "Duplicate custom encode preset for {encoder}: {name}",
-                    {"encoder": preset.encoder, "name": name},
-                )
-            names_by_encoder[preset.encoder].add(normalized_name)
-        return None
-
-    def _normalized_custom_encode_presets(self) -> tuple[UserEncodePreset, ...]:
-        error = self._custom_preset_validation_error()
-        if error is not None:
-            template, values = error
-            raise ValueError(template.format(**values))
-        return tuple(
-            replace(
-                preset,
-                name=preset.name.strip(),
-                parameters=preset.parameters.strip(),
-            )
-            for preset in self._custom_encode_presets
-        )
+            self._cpu_preset_editor.set_mode(encoder, encode_presets_for_encoder(encoder))
 
     def _build_external_tools_tab(self) -> QWidget:
         tab = QWidget(self)
@@ -1242,19 +999,95 @@ class SettingsDialog(AnimatedDialog):
         if self._refresh_external_tool_detection() and name == "SVT_AV1_PATH":
             self._refresh_advanced_encode_options(refresh_presets=False)
 
+    def _gpu_encoding_toggled(self, enabled: bool) -> None:
+        self.encode_device_controls.set_gpu_enabled(enabled)
+        if not self.encode_device_controls.gpu_enabled:
+            thread = self._gpu_diagnostic_thread
+            if thread is not None and not thread.diagnostics:
+                thread.cancel.set()
+        elif not self.encode_device_controls.devices:
+            self._start_gpu_detection(diagnostics=False)
+
+    def _detect_gpus(self) -> None:
+        self._start_gpu_detection(diagnostics=True)
+
+    def _start_gpu_detection(self, *, diagnostics: bool) -> None:
+        if self._gpu_diagnostic_thread is not None:
+            return
+        report = self.gpu_detection_report
+        if diagnostics:
+            report.clear()
+            report.show()
+            self.gpu_report_copy_button.show()
+        if not self._refresh_external_tool_detection(force=True):
+            if diagnostics:
+                report.setPlainText(self.external_tools_status_label.text())
+            return
+        self.gpu_detection_button.setEnabled(False)
+        self.gpu_detection_button.setText(self.t("Detecting GPUs..."))
+        # The parent window keeps the thread alive during cancellation if Settings closes.
+        with using_tool_paths(self._resolved_tools):
+            thread = GpuProbeThread(
+                self._resolved_tools["FFMPEG_PATH"], self._resolved_tools["FFPROBE_PATH"],
+                self.parentWidget() or QApplication.instance(), diagnostics=diagnostics,
+            )
+        self._gpu_diagnostic_thread = thread
+        thread.detail.connect(report.appendPlainText)
+        thread.found.connect(self._accept_gpu_detection)
+        thread.finished.connect(self._finish_gpu_diagnostic)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _accept_gpu_detection(self, devices: tuple[GpuEncodeDevice, ...]) -> None:
+        thread = self._gpu_diagnostic_thread
+        if thread is not None and not thread.cancel.is_set():
+            self._gpu_detection_result = ((thread.ffmpeg, thread.ffprobe), devices)
+            self.encode_device_controls.set_devices(devices)
+
+    def detected_gpu_devices(self, ffmpeg: str, ffprobe: str) -> tuple[GpuEncodeDevice, ...] | None:
+        if self._gpu_detection_result and self._gpu_detection_result[0] == (ffmpeg, ffprobe):
+            return self._gpu_detection_result[1]
+        return None
+
+    def _finish_gpu_diagnostic(self) -> None:
+        thread = self._gpu_diagnostic_thread
+        self._gpu_diagnostic_thread = None
+        self.gpu_detection_button.setText(self.t("Detect GPUs"))
+        self.gpu_detection_button.setEnabled(True)
+        if (thread is not None and thread.cancel.is_set() and self.isVisible()
+                and self.encode_device_controls.gpu_enabled and not self.encode_device_controls.devices):
+            self._start_gpu_detection(diagnostics=False)
+
+    def _cancel_gpu_diagnostic(self) -> None:
+        if self._gpu_diagnostic_thread is not None:
+            self._gpu_diagnostic_thread.cancel.set()
+
+    def _copy_gpu_report(self) -> None:
+        QApplication.clipboard().setText(self.gpu_detection_report.toPlainText())
+
     def accept(self) -> None:
         if not window_is_fading_out(self) and self._apply_settings():
             super().accept()
 
     def _apply_settings(self) -> bool:
-        validation_error = self._custom_preset_validation_error()
-        if validation_error is not None:
-            template, values = validation_error
-            AnimatedMessageBox.warning(
-                self,
-                self.t("Settings"),
-                self.t(template).format(**values),
+        try:
+            validate_custom_preset_names(
+                self._cpu_preset_editor.custom_presets, lambda _: ENCODE_PRESET_NAMES, self.t,
             )
+            parameters = {choice.parameters for choice in self.encode_device_controls.gpu_choices().values()}
+            devices = {device.key: device for device in self.encode_device_controls.devices}
+            for saved in self.encode_device_controls.gpu_preferences():
+                device = devices.get(saved.device)
+                validate_custom_preset_names(
+                    saved.custom_presets,
+                    lambda scope: gpu_presets(device, *scope, verified_only=False) if device is not None else (),
+                    self.t,
+                )
+                parameters.update(preset.parameters.strip() for preset in saved.custom_presets)
+            for value in parameters:
+                hardware_encoder_parameters(value)
+        except ValueError as error:
+            AnimatedMessageBox.warning(self, self.t("Settings"), str(error))
             return False
         for edit, saved_path in (
             (self.main_background_edit, self._config.ui.main_background_path),
@@ -1296,7 +1129,6 @@ class SettingsDialog(AnimatedDialog):
         for name, edit in self._tool_path_edits.items():
             edit.setText(config.tools[name])
         self._refresh_external_tool_detection()
-        self._custom_encode_presets = list(config.encode.custom_presets)
         self._set_combo_data(self.function_page_combo, config.startup.function_page)
         self._set_combo_data(self.episode_mode_combo, config.startup.episode_mode)
         self._set_combo_data(self.language_combo, config.ui.language)
@@ -1354,7 +1186,17 @@ class SettingsDialog(AnimatedDialog):
             self.default_bit_depth_combo,
             config.encode.bit_depth,
         )
-        self._refill_custom_preset_controls(config.encode.preset)
+        self._cpu_preset_editor.custom_presets = list(config.encode.custom_presets)
+        self._cpu_preset_editor.set_mode(
+            config.encode.encoder, encode_presets_for_encoder(config.encode.encoder),
+            selected=config.encode.preset,
+        )
+        if config.encode.cpu_parameters is not None:
+            self._cpu_preset_editor.set_parameter_override(config.encode.cpu_parameters)
+        self.gpu_enable_checkbox.blockSignals(True)
+        self.gpu_enable_checkbox.setChecked(config.encode.gpu_enabled)
+        self.gpu_enable_checkbox.blockSignals(False)
+        self.encode_device_controls.restore(config.encode)
         self._set_combo_data(
             self.default_lossless_audio_combo,
             config.encode.lossless_audio_codec,
@@ -1396,6 +1238,7 @@ class SettingsDialog(AnimatedDialog):
         )
 
     def selected_config(self) -> AppConfig:
+        cpu_editor = self._cpu_preset_editor
         return replace(
             self._config,
             ui=UiPreferences(
@@ -1454,8 +1297,25 @@ class SettingsDialog(AnimatedDialog):
             encode=EncodePreferences(
                 encoder=str(self.default_encoder_combo.currentData()),
                 bit_depth=str(self.default_bit_depth_combo.currentData()),
-                preset=str(self.default_preset_combo.currentData()),
-                custom_presets=self._normalized_custom_encode_presets(),
+                preset=cpu_editor.selected_name.strip(),
+                custom_presets=tuple(
+                    replace(preset, name=preset.name.strip(), parameters=preset.parameters.strip())
+                    for preset in cpu_editor.custom_presets
+                ),
+                cpu_enabled=self.encode_device_controls.cpu_preference(),
+                cpu_parameters=cpu_editor.parameter_override,
+                gpu_enabled=self.gpu_enable_checkbox.isChecked(),
+                gpu_devices=tuple(
+                    replace(
+                        device,
+                        preset=device.preset.strip(),
+                        custom_presets=tuple(
+                            replace(preset, name=preset.name.strip(), parameters=preset.parameters.strip())
+                            for preset in device.custom_presets
+                        ),
+                    )
+                    for device in self.encode_device_controls.gpu_preferences()
+                ),
                 lossless_audio_codec=str(
                     self.default_lossless_audio_combo.currentData()
                 ),

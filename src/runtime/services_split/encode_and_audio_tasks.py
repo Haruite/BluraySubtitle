@@ -17,6 +17,7 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from configparser import ConfigParser
 from contextvars import ContextVar
+from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
 from typing import Optional
@@ -27,7 +28,6 @@ from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.audio_conversion import AudioEncodingSettings, mux_with_audio_conversion
 from src.runtime.dolby_vision import (
     DolbyVisionEncodePlan,
-    dolby_vision_tool_path,
     inject_dolby_vision_rpu,
     prepare_dolby_vision_encode,
     verify_dolby_vision_rpu,
@@ -50,6 +50,9 @@ from src.runtime.encode_source import (
     write_hdr_metadata_error_report,
 )
 from src.runtime.encode_results import EncodeTaskFailure
+from src.runtime.hardware_encode import (
+    GPU_MUXERS, GPU_OUTPUT_DEPTHS, GpuEncodeDevice, VideoEncodeChoice, hardware_encode_command,
+)
 from src.runtime.frame_check import run_full_frame_check
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL,
@@ -218,6 +221,22 @@ def _read_getnative_progress_messages(
     return messages
 
 
+def _record_encode_warning(service, message: str) -> None:
+    warnings = getattr(service, 'encode_warnings', None)
+    if not isinstance(warnings, list):
+        warnings = []
+        service.encode_warnings = warnings
+    warnings.append(message)
+    _emit_encode_log_line(f'[encode-source] {message}', translate=False)
+    service._progress(text=message)
+
+
+def _warn_unsupported_hdr_mode(service, feature: str, encoder: str, depth: str, path: str) -> None:
+    _record_encode_warning(service, translate_text(
+        '{feature} cannot be preserved with {encoder} at {depth}-bit. Encoding will continue: {path}'
+    ).format(feature=feature, encoder=encoder, depth=depth, path=path))
+
+
 def _record_nonblocking_hdr_automation_failure(
         service,
         output_file: str,
@@ -243,13 +262,7 @@ def _record_nonblocking_hdr_automation_failure(
         path=source_path,
         report=report_path or translate_text('unavailable'),
     )
-    warnings = getattr(service, 'encode_warnings', None)
-    if not isinstance(warnings, list):
-        warnings = []
-        service.encode_warnings = warnings
-    warnings.append(warning)
-    _emit_encode_log_line(f'[encode-source] {warning}')
-    service._progress(text=warning)
+    _record_encode_warning(service, warning)
 
 
 def _plan_automatic_encoder_metadata(
@@ -266,6 +279,8 @@ def _plan_automatic_encoder_metadata(
         hdr10plus_json_path: str,
         dolby_vision_rpu_path: str,
         progress_name: str = '',
+        *,
+        hardware: bool = False,
 ) -> tuple[
     list[str],
     tuple[str, ...],
@@ -295,6 +310,8 @@ def _plan_automatic_encoder_metadata(
     hdr10plus_metadata_prepared = False
     try:
         actual_source = probe_actual_encode_source(source_path)
+    except TaskCancelled:
+        raise
     except Exception as error:
         _record_nonblocking_hdr_automation_failure(
             service,
@@ -316,6 +333,13 @@ def _plan_automatic_encoder_metadata(
             None,
         )
 
+    input_metadata = parse_source_color_metadata(actual_source)
+    source_is_hdr = bool(
+        input_metadata.color_transfer in ('smpte2084', 'arib-std-b67')
+        or input_metadata.mastering_display_x26x
+        or input_metadata.content_light_level
+    )
+    hdr10plus_present = source_has_hdr10plus(actual_source)
     source_message = translate_text(
         'Actual encode source: {name} (stream {stream}, codec {codec}); output: {output}'
     ).format(
@@ -342,7 +366,7 @@ def _plan_automatic_encoder_metadata(
             vspipe_executable,
             vspipe_environment,
         )
-    except VapourSynthOutputMetadataMismatch:
+    except (TaskCancelled, VapourSynthOutputMetadataMismatch):
         raise
     except Exception as error:
         _record_nonblocking_hdr_automation_failure(
@@ -357,12 +381,33 @@ def _plan_automatic_encoder_metadata(
     service._progress(text=translate_text(
         'Planning automatic encoder metadata parameters: {name}'
     ).format(name=progress_name))
+    include_static_hdr = bit_depth != '8'
+    final_metadata = parse_source_color_metadata(actual_source)
+    if not include_static_hdr:
+        if source_is_hdr or final_metadata.color_transfer in ('smpte2084', 'arib-std-b67'):
+            _warn_unsupported_hdr_mode(service, 'HDR', encoder, bit_depth, output_file)
+        final_metadata = replace(
+            final_metadata, mastering_display_x26x=None, mastering_display_svt=None, content_light_level=None,
+        )
+    elif source_is_hdr and vpy_color_changed:
+        _record_encode_warning(service, translate_text(
+            'Source HDR metadata will not be retained because the VapourSynth output changed '
+            'color primaries or transfer characteristics: {path}'
+        ).format(path=output_file))
     try:
         automatic_arguments = build_automatic_encoder_metadata_arguments(
             actual_source,
-            encoder,
+            'x265' if hardware else encoder,
             manual_arguments,
+            include_static_hdr=include_static_hdr,
         )
+        if hardware and encoder == 'av1':
+            # AV1 signals only left and top-left positions for 4:2:0.
+            automatic_arguments = tuple(
+                token for option, value in zip(automatic_arguments[::2], automatic_arguments[1::2])
+                if option != '--chromaloc' or value in ('0', '2')
+                for token in (option, value)
+            )
     except Exception as error:
         _record_nonblocking_hdr_automation_failure(
             service,
@@ -373,27 +418,28 @@ def _plan_automatic_encoder_metadata(
             'encoding will continue: {path}. Error report: {report}',
             error,
         )
+    hdr10plus_supported = (encoder == 'hevc' and bit_depth == '10') if hardware else (
+        encoder == 'x265' and bit_depth in ('10', '12')
+    )
     x265_dynamic_options = (
         probe_x265_dynamic_metadata_options(encoder_executable)
-        if encoder == 'x265' and (
-            source_has_hdr10plus(actual_source)
-            or (dolby_vision_rpu_path and not vpy_color_changed)
+        if encoder == 'x265' and not vpy_color_changed and (
+            (hdr10plus_present and hdr10plus_supported) or dolby_vision_rpu_path
         )
         else frozenset()
     )
     hdr10plus_error = None
     if (
-            source_has_hdr10plus(actual_source)
+            hdr10plus_present
             and not arguments_contain_option(manual_arguments, '--dhdr10-info')
     ):
-        if encoder != 'x265' or bit_depth not in ('10', '12'):
-            hdr10plus_error = RuntimeError(translate_text(
-                'HDR10+ preservation requires x265 with 10-bit or 12-bit output'
-            ))
+        if not hdr10plus_supported:
+            _warn_unsupported_hdr_mode(service, 'HDR10+', encoder, bit_depth, output_file)
         elif vpy_color_changed:
-            hdr10plus_error = RuntimeError(translate_text(
-                'HDR10+ metadata does not match the changed VapourSynth color output'
-            ))
+            _record_encode_warning(service, translate_text(
+                'HDR10+ metadata will not be retained because the VapourSynth output changed '
+                'color primaries or transfer characteristics: {path}'
+            ).format(path=output_file))
         else:
             try:
                 extract_hdr10plus_metadata(
@@ -401,6 +447,8 @@ def _plan_automatic_encoder_metadata(
                     hdr10plus_json_path,
                     vpy_timeline,
                 )
+            except TaskCancelled:
+                raise
             except Exception as error:
                 hdr10plus_error = error
             else:
@@ -468,7 +516,7 @@ def _plan_automatic_encoder_metadata(
         vpy_color_changed,
         hdr10plus_metadata_prepared,
         native_dolby_vision,
-        parse_source_color_metadata(actual_source),
+        final_metadata,
         vpy_timeline[0] if vpy_timeline is not None else None,
         source_frame_count,
     )
@@ -727,36 +775,6 @@ def _run_vspipe_svt_win_tempfile_encode(
 
 
 
-
-def encode_dovi_preservation_supported(tool: str, encode_bit_depth: str) -> bool:
-    """Return whether the output meets Dolby Vision profile 8.1's Main10 requirement."""
-    return tool == 'x265' and int(encode_bit_depth) == 10
-
-
-def encode_dovi_preflight_mkv_paths(
-        mkv_paths: list[str],
-        encoder: str,
-        bit_depth: str,
-) -> Optional[str]:
-    """Return the first deterministic Dolby Vision preflight error."""
-    dolby_vision_paths = [
-        path
-        for raw_path in mkv_paths or []
-        if (path := os.path.normpath(str(raw_path or '')))
-        and os.path.isfile(path)
-        and MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(path) is not None
-    ]
-    if not dolby_vision_paths:
-        return None
-    if encoder == 'svtav1':
-        return None
-    if not encode_dovi_preservation_supported(encoder, bit_depth):
-        return translate_text(
-            'Dolby Vision preservation requires x265 with 10-bit output'
-        )
-    if not dolby_vision_tool_path():
-        return translate_text('dovi_tool executable does not exist')
-    return None
 
 _VPY_A_LINE_RE = re.compile(
     r'^(\s*)(#\s*)?(\ba\s*=\s*)(.+?)(\s*(#.*)?)\s*$',
@@ -1404,6 +1422,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             progress_name: str = '',
             video_progress_name: str = '',
             cancel_event: Optional[threading.Event] = None,
+            hardware_device: GpuEncodeDevice | None = None,
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1412,6 +1431,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
 
         src_mkv = os.path.normpath(source_file)
+        source_info = None
         output_folder = os.path.dirname(os.path.abspath(output_file))
         bd = bit_depth
         bits_int = int(bd)
@@ -1422,6 +1442,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             'x264': '.h264',
             'x265': '.hevc',
             'svtav1': '.ivf',
+            'h264': '.h264',
+            'hevc': '.hevc',
+            'av1': '.ivf',
+            'prores': '.prores.mkv',
+            'ffv1': '.ffv1.mkv',
         }[encoder]
         while True:
             artifact_token = uuid.uuid4().hex[:12]
@@ -1440,6 +1465,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         encoded_path = artifact_base + encoded_extension
         output_timestamps_path = artifact_base + '.timestamps.txt'
         hdr10plus_json_path = artifact_base + '.hdr10plus.json'
+        dovi_injected_path = encoded_path + '.dovi.hevc'
         hdr10plus_injected_path = encoded_path + '.hdr10plus.hevc'
         hdr10plus_metadata_active = False
         native_hdr10plus = False
@@ -1507,60 +1533,43 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
             dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
             if dv_tid is not None:
-                if encoder == 'svtav1':
-                    dovi_completion_warning = translate_text(
-                        'Dolby Vision metadata will not be retained for SVT-AV1 output: {path}'
-                    ).format(path=output_file)
-                    print(f'[encode-dovi] {dovi_completion_warning}', flush=True)
-                    try:
-                        self._progress(text=dovi_completion_warning)
-                    except TaskCancelled:
-                        raise
-                    except Exception:
-                        pass
+                if encoder not in ('x265', 'hevc') or bd != '10':
+                    _warn_unsupported_hdr_mode(self, 'Dolby Vision', encoder, bd, output_file)
                 else:
-                    if not encode_dovi_preservation_supported(encoder, bd):
-                        print(
-                            f'[encode-dovi] '
-                            f'{translate_text("Dolby Vision preservation requires x265 with 10-bit output")} '
-                            f'({os.path.basename(src_mkv)})',
-                            flush=True,
-                        )
-                        raise RuntimeError(
-                            translate_text('Dolby Vision encode settings are not supported: {path}').format(
-                                path=src_mkv
-                            )
-                        )
+                    self._progress(text=translate_text(
+                        'Dolby Vision: preparing {name}'
+                    ).format(name=progress_name))
                     try:
-                        self._progress(
-                            text=translate_text('Dolby Vision: preparing {name}').format(
-                                name=progress_name
-                            )
-                        )
-                    except TaskCancelled:
-                        raise
-                    except Exception:
-                        pass
-                    try:
+                        source_info = MediaInfoTrackMappingMixin._mkvmerge_identify_json(src_mkv)
+                        default_duration_ns = next((
+                            track.get('properties', {}).get('default_duration')
+                            for track in source_info.get('tracks', []) if track.get('id') == dv_tid
+                        ), None)
                         encode_dovi_plan = prepare_dolby_vision_encode(
                             src_mkv, int(dv_tid), output_folder, crop_plan,
+                            default_duration_ns=default_duration_ns,
                             check_cancel=self._progress,
                         )
+                    except TaskCancelled:
+                        raise
+                    except Exception as error:
+                        _record_nonblocking_hdr_automation_failure(
+                            self,
+                            output_file,
+                            src_mkv,
+                            'Dolby Vision preparation',
+                            'Dolby Vision metadata could not be prepared. Encoding will continue: '
+                            '{path}. Error report: {report}',
+                            error,
+                        )
+                    else:
+                        vpy_video_source = encode_dovi_plan.base_layer_path
                         if encode_dovi_plan.fel_residual_discarded:
                             dovi_completion_warning = translate_text(
                                 'Encoding completed from the base layer. The source has FEL or an '
                                 'unrecognized enhancement layer; this tool workflow did not use '
                                 'its image residuals: {path}'
                             ).format(path=output_file)
-                    except TaskCancelled:
-                        raise
-                    except Exception as error:
-                        raise EncodeTaskFailure(
-                            'Dolby Vision preparation',
-                            str(error),
-                            tuple(getattr(error, 'artifact_paths', ()) or ()),
-                        ) from error
-                    vpy_video_source = encode_dovi_plan.base_layer_path
 
         failure_stage = 'VapourSynth preparation'
         try:
@@ -1789,7 +1798,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             # Metadata probing does not render final subtitles and needs no timecodes.
             vspipe_env.pop('BLURAYSUB_VPY_TIMECODES', None)
             vspipe_env.pop('BLURAYSUB_VPY_FRAMES', None)
-            enc_exe = tool_path(ENCODER_PATH_NAMES[encoder])
+            enc_exe = tool_path('FFMPEG_PATH' if hardware_device else ENCODER_PATH_NAMES[encoder])
 
             failure_stage = 'Actual encode source and metadata planning'
             self._progress(text=translate_text(
@@ -1818,6 +1827,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 hdr10plus_json_path,
                 encode_dovi_plan.rpu_path if encode_dovi_plan else '',
                 progress_name,
+                hardware=hardware_device is not None,
             )
             failure_stage = 'Video timestamp preparation'
             if expected_output_frames is None:
@@ -1828,7 +1838,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             self._progress(text=translate_text(
                 'Reading video timestamps: {name}'
             ).format(name=progress_name))
-            source_info = MediaInfoTrackMappingMixin._mkvmerge_identify_json(src_mkv)
+            if source_info is None:
+                source_info = MediaInfoTrackMappingMixin._mkvmerge_identify_json(src_mkv)
             source_tracks = source_info.get('tracks', [])
             timestamp_scale = source_info.get('container', {}).get(
                 'properties', {}
@@ -1856,14 +1867,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 '--dhdr10-info',
             )
             failure_stage = 'VapourSynth preparation'
+            dolby_vision_metadata_active = bool(encode_dovi_plan and not vpy_color_changed)
             if encode_dovi_plan and vpy_color_changed:
-                message = translate_text(
+                _record_encode_warning(self, translate_text(
                     'Dolby Vision metadata will not be retained because the '
                     'VapourSynth output changed color primaries or transfer '
                     'characteristics: {path}'
-                ).format(path=vpy_path)
-                self.encode_warnings.append(message)
-                self._progress(text=message)
+                ).format(path=output_file))
 
             extra = list(manual_encoder_arguments) + list(
                 automatic_metadata_arguments
@@ -1877,7 +1887,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             ):
                 extra = ['--profile', '2'] + list(extra)
 
-            if encoder == 'x264':
+            if hardware_device:
+                enc_cmd = hardware_encode_command(
+                    enc_exe, VideoEncodeChoice(encoder, bd, encoder_parameters, hardware_device),
+                    ['-f', 'yuv4mpegpipe', '-i', 'pipe:0'],
+                    ['-f', GPU_MUXERS[encoder], encoded_path],
+                    metadata_args=automatic_metadata_arguments,
+                )
+            elif encoder == 'x264':
                 enc_cmd = [enc_exe, '--demuxer', 'y4m', '-'] + extra + ['--output-depth', bd, '-o', encoded_path]
             elif encoder == 'x265':
                 # Stdin is already '--y4m' '-' ; a trailing '-' is parsed as a second input (unused) and can abort x265.
@@ -1949,7 +1966,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         path=encoded_path
                     )
                 )
-            if encode_dovi_plan and not vpy_color_changed:
+            if hardware_device:
+                actual_video = probe_actual_encode_source(encoded_path)
+                pixels = actual_video.stream.get('pix_fmt')
+                if actual_video.codec_name != encoder or GPU_OUTPUT_DEPTHS.get(pixels) != bd:
+                    raise RuntimeError(translate_text(
+                        'Hardware encoder did not produce the selected codec and bit depth: {path}'
+                    ).format(path=encoded_path))
+            if encode_dovi_plan and dolby_vision_metadata_active:
                 dolby_vision_verified = False
                 if native_dolby_vision:
                     failure_stage = 'Dolby Vision RPU verification'
@@ -1959,6 +1983,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             expected_output_frames,
                             8,
                         )
+                    except TaskCancelled:
+                        raise
                     except Exception:
                         pass
                     else:
@@ -1970,18 +1996,30 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             'Dolby Vision: injecting RPU into {name}'
                         ).format(name=progress_name)
                     )
-                    inject_dolby_vision_rpu(encoded_path, encode_dovi_plan)
-                    failure_stage = 'Dolby Vision RPU verification'
-                    verify_dolby_vision_rpu(
-                        encoded_path,
-                        expected_output_frames,
-                        8,
-                    )
+                    try:
+                        inject_dolby_vision_rpu(
+                            encoded_path, encode_dovi_plan, expected_frame_count=expected_output_frames,
+                        )
+                    except TaskCancelled:
+                        raise
+                    except Exception as error:
+                        dolby_vision_metadata_active = False
+                        _record_nonblocking_hdr_automation_failure(
+                            self,
+                            output_file,
+                            output_file,
+                            failure_stage,
+                            'Dolby Vision metadata could not be verified in the encoded video. '
+                            'Encoding will continue: {path}. Error report: {report}',
+                            error,
+                        )
             if hdr10plus_metadata_active:
                 hdr10plus_verified = False
                 if native_hdr10plus:
                     try:
                         verify_hdr10plus_metadata(encoded_path)
+                    except TaskCancelled:
+                        raise
                     except Exception:
                         pass
                     else:
@@ -1991,7 +2029,10 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         inject_hdr10plus_metadata(
                             encoded_path,
                             hdr10plus_json_path,
+                            dolby_vision_frames=expected_output_frames if dolby_vision_metadata_active else None,
                         )
+                    except TaskCancelled:
+                        raise
                     except Exception as error:
                         _record_nonblocking_hdr_automation_failure(
                             self,
@@ -2003,14 +2044,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             error,
                         )
                         hdr10plus_metadata_active = False
-                    else:
-                        if encode_dovi_plan and not vpy_color_changed:
-                            failure_stage = 'Dolby Vision RPU verification'
-                            verify_dolby_vision_rpu(
-                                encoded_path,
-                                expected_output_frames,
-                                8,
-                            )
             soft_subtitle = subtitle_path if subtitle_mode == 'soft' else ''
             failure_stage = 'Final Matroska mux'
 
@@ -2030,6 +2063,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 audio_codec_choices=audio_codec_choices,
                 track_language_overrides=track_language_overrides,
                 encoded_video_file=encoded_path,
+                encoded_video_hdr=expected_final_video_metadata if hardware_device else None,
                 video_timestamps_file=output_timestamps_path,
                 subtitle_file=soft_subtitle,
                 subtitle_language=subtitle_language,
@@ -2050,21 +2084,27 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     expected_final_video_metadata,
                     automatic_metadata_arguments,
                 )
+            except TaskCancelled:
+                raise
             except Exception as error:
                 final_verification_errors.append(error)
             if hdr10plus_metadata_active:
                 try:
                     verify_hdr10plus_metadata(output_file)
+                except TaskCancelled:
+                    raise
                 except Exception as error:
                     final_verification_errors.append(error)
                     hdr10plus_metadata_active = False
-            if encode_dovi_plan and not vpy_color_changed:
+            if dolby_vision_metadata_active:
                 try:
                     verify_dolby_vision_rpu(
                         output_file,
                         expected_output_frames,
                         8,
                     )
+                except TaskCancelled:
+                    raise
                 except Exception as error:
                     final_verification_errors.append(error)
             if final_verification_errors:
@@ -2169,7 +2209,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     encoded_path,
                     output_timestamps_path,
                     hdr10plus_json_path,
-                    encoded_path + '.dovi.hevc',
+                    dovi_injected_path,
                     hdr10plus_injected_path,
             ):
                 if os.path.isfile(path) and os.path.getsize(path) > 0:
@@ -2198,7 +2238,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     encoded_path,
                     output_timestamps_path,
                     hdr10plus_json_path,
-                    encoded_path + '.dovi.hevc',
+                    dovi_injected_path,
                     hdr10plus_injected_path,
             ):
                 if os.path.isfile(path) and os.path.getsize(path) > 0:
@@ -2221,6 +2261,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             force_remove_file(output_timestamps_path)
             if os.path.isfile(encoded_path):
                 force_remove_file(encoded_path)
+            if os.path.isfile(dovi_injected_path):
+                force_remove_file(dovi_injected_path)
             if os.path.isfile(hdr10plus_injected_path):
                 force_remove_file(hdr10plus_injected_path)
             if os.path.isfile(hdr10plus_json_path) and (

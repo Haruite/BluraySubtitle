@@ -7,6 +7,10 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
+from contextvars import copy_context
 from dataclasses import replace
 from typing import Optional
 
@@ -20,6 +24,7 @@ from src.exports.utils import (
     get_index_to_m2ts_and_offset,
     get_time_str,
     force_remove_file,
+    mkvmerge_cancellation_scope,
     print_terminal_line,
     run_command,
 )
@@ -1455,34 +1460,25 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             sp_progress_span: Optional[int] = None,
     ) -> EncodeBatchResult:
         """Encode every planned row through one shared execution path."""
-        from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
-
         selected_sp_rows = [row for row in sp_rows if row.selected]
         # Remux-source outputs are durable checkpoints for multi-day Encode tasks.
         resume_existing_outputs = request.input_mode == 'remux'
-        encode_sources = [
-            row.source_path
-            for row in main_rows
-            if not (resume_existing_outputs and os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0)
-        ]
-        encode_sources.extend(
-            row.source_path
-            for row in selected_sp_rows
-            if (
-                str(row.source_path).lower().endswith('.mkv')
-                and not (resume_existing_outputs and os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0)
+        def source_key(path: str) -> str:
+            return os.path.normcase(os.path.realpath(path))
+
+        staged_main_sources = {source_key(row.source_path) for row in main_rows}
+        linked_sp_indexes = {
+            index for index, row in enumerate(selected_sp_rows)
+            if row.uses_main_output or (
+                request.input_mode == 'bdmv' and source_key(row.source_path) in staged_main_sources
             )
-        )
-        dolby_vision_error = encode_dovi_preflight_mkv_paths(
-            encode_sources,
-            request.settings.encoder,
-            request.settings.bit_depth,
-        )
-        if dolby_vision_error:
-            raise RuntimeError(dolby_vision_error)
+        }
+        independent_rows = main_rows + [
+            row for index, row in enumerate(selected_sp_rows) if index not in linked_sp_indexes
+        ]
+        cpu_choice = request.settings.cpu_encode_choice()
 
         self.encode_warnings = []
-        row_results: list[EncodeRowResult] = []
         self.sub_files = [row.subtitle_path for row in main_rows]
         self.episode_subtitle_languages = [row.subtitle_language for row in main_rows]
         self.use_getnative = request.settings.use_getnative
@@ -1647,6 +1643,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             )
 
         def write_comparison_images_or_warn(
+                row_service,
                 row: EncodeRow,
                 source_path: str,
                 row_number: int,
@@ -1670,16 +1667,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     name=os.path.basename(row.output_path),
                     error=str(error),
                 )
-                self.encode_warnings.append(message)
+                row_service.encode_warnings.append(message)
                 self._progress(text=message)
 
-        def record_completed_row(
+        def completed_row(
+                row_service,
                 row: EncodeRow,
                 row_type: str,
-                warning_start: int,
-        ) -> None:
-            row_warnings = tuple(self.encode_warnings[warning_start:])
-            row_results.append(EncodeRowResult(
+        ) -> EncodeRowResult:
+            row_warnings = tuple(row_service.encode_warnings)
+            return EncodeRowResult(
                 row_type=row_type,
                 source_path=row.source_path,
                 output_path=row.output_path,
@@ -1689,14 +1686,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     else 'completed'
                 ),
                 warnings=row_warnings,
-            ))
+            )
 
-        def record_failed_row(
+        def failed_row(
+                row_service,
                 row: EncodeRow,
                 row_type: str,
-                warning_start: int,
                 error: Exception,
-        ) -> None:
+        ) -> EncodeRowResult:
             artifact_paths = tuple(dict.fromkeys(
                 os.path.abspath(os.path.normpath(path))
                 for path in tuple(getattr(error, 'artifact_paths', ()) or ())
@@ -1730,10 +1727,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 path=row.output_path,
                 report=report_path or translate_text('unavailable'),
             )
-            prior_warnings = tuple(self.encode_warnings[warning_start:])
-            self.encode_warnings.append(failure_message)
             self._progress(text=failure_message)
-            row_results.append(EncodeRowResult(
+            return EncodeRowResult(
                 row_type=row_type,
                 source_path=row.source_path,
                 output_path=row.output_path,
@@ -1745,10 +1740,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 message=str(error),
                 report_path=report_path,
                 artifact_paths=artifact_paths,
-                warnings=prior_warnings + (failure_message,),
-            ))
+                warnings=tuple(row_service.encode_warnings) + (failure_message,),
+            )
 
         def execute_video_row(
+                row_service,
                 row: EncodeRow,
                 source_path: str,
                 progress_name: str,
@@ -1757,14 +1753,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             video_progress_name = str(
                 video_progress_name or os.path.basename(row.output_path)
             ).strip()
-            self.encode_task(
+            choice = row.video_encode or cpu_choice
+            row_service.encode_task(
                 row.output_path,
                 row.vpy_path,
-                request.settings.encoder_parameters,
+                choice.parameters,
                 request.settings.subtitle_mode,
                 source_file=source_path,
-                encoder=request.settings.encoder,
-                bit_depth=request.settings.bit_depth,
+                encoder=choice.encoder,
+                bit_depth=choice.bit_depth,
+                hardware_device=choice.device,
                 selected_audio_tracks=(
                     row.audio_tracks if request.input_mode == 'remux' else None
                 ),
@@ -1814,10 +1812,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     )
                 )
 
-        planned_output_paths = {
-            os.path.normcase(os.path.abspath(row.output_path))
-            for row in main_rows + selected_sp_rows
-        }
+        planned_output_paths = set()
+        for row in independent_rows:
+            path = os.path.normcase(os.path.abspath(row.output_path))
+            if path in planned_output_paths:
+                raise ValueError(translate_text('Duplicate output path: {path}').format(path=row.output_path))
+            planned_output_paths.add(path)
         external_subtitles: list[tuple[str, str, str]] = []
         if request.settings.subtitle_mode == 'external':
             for row in main_rows:
@@ -1918,195 +1918,148 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 )
 
         os.makedirs(request.output_folder, exist_ok=True)
-        total_rows = max(1, len(main_rows) + len(selected_sp_rows))
-        completed_rows = 0
-        completed_main_rows = 0
-        completed_sp_rows = 0
-        weighted_progress = (
-            main_progress_span is not None
-            and sp_progress_span is not None
-        )
+        weighted_progress = main_progress_span is not None and sp_progress_span is not None
+        planned_rows = []
+        sp_number = 0
+        for row_index, row in enumerate(main_rows + selected_sp_rows):
+            is_sp = row_index >= len(main_rows)
+            linked = is_sp and row_index - len(main_rows) in linked_sp_indexes
+            if is_sp and not linked:
+                sp_number += 1
+            sequence = (None if linked else sp_number) if is_sp else row_index + 1
+            video = not is_sp or (not linked and row.source_path.lower().endswith('.mkv'))
+            choice = row.video_encode or cpu_choice
+            lane = None
+            if video and not os.path.exists(row.output_path):
+                lane = choice.device.key if choice.device is not None else 'cpu'
+            planned_rows.append((row_index, row, is_sp, sequence, video, lane))
 
-        def row_progress(category: str) -> int:
-            if not weighted_progress:
-                return progress_base + int(
-                    completed_rows / total_rows * progress_span
-                )
-            if category == 'main':
-                return progress_base + int(
-                    completed_main_rows
-                    / max(len(main_rows), 1)
-                    * main_progress_span
-                )
-            return progress_base + main_progress_span + int(
-                completed_sp_rows
-                / max(len(selected_sp_rows), 1)
-                * sp_progress_span
-            )
-
-        for row in main_rows:
-            if cancel_event and cancel_event.is_set():
-                raise TaskCancelled()
-            warning_start = len(self.encode_warnings)
-            progress_name = f'EP{completed_main_rows + 1:02d}'
-            self._progress(
-                row_progress('main'),
-                self.t('Preparing episode {current}/{total}: {name}').format(
-                    current=completed_main_rows + 1,
-                    total=len(main_rows),
-                    name=progress_name,
-                ),
-            )
-            if os.path.exists(row.output_path):
-                self._progress(
-                    text=self.t('Skipping existing output: {path}').format(
-                        path=row.output_path
-                    )
-                )
-                write_comparison_images_or_warn(
-                    row,
-                    row.source_path,
-                    completed_rows + 1,
-                    progress_name,
-                )
-                record_completed_row(row, 'Main row', warning_start)
-                completed_rows += 1
-                completed_main_rows += 1
-                continue
-            os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
-            try:
-                execute_video_row(row, row.source_path, progress_name)
-            except TaskCancelled:
-                raise
-            except Exception as error:
-                record_failed_row(row, 'Main row', warning_start, error)
-            else:
-                write_comparison_images_or_warn(
-                    row,
-                    row.source_path,
-                    completed_rows + 1,
-                    progress_name,
-                )
-                record_completed_row(row, 'Main row', warning_start)
-            completed_rows += 1
-            completed_main_rows += 1
-
-        staged_main_sources = {
-            os.path.normcase(os.path.abspath(row.source_path))
-            for row in main_rows
+        lanes = dict.fromkeys(item[-1] for item in planned_rows if item[-1] is not None)
+        fallback_lane = 'cpu' if 'cpu' in lanes else next(iter(lanes), 'cpu')
+        queues = {lane: [] for lane in lanes or (fallback_lane,)}
+        for item in planned_rows:
+            queues[item[-1] or fallback_lane].append(item)
+        parallel = len(queues) > 1
+        if parallel and cancel_event is None:
+            cancel_event = threading.Event()
+        source_counts = Counter(source_key(row.source_path) for _, row, _, _, _, lane in planned_rows if lane)
+        source_locks = {
+            key: threading.Lock() for key, count in source_counts.items() if parallel and count > 1
         }
-        # Number every independent output, including copy-only assets. Linked tracks are already in the episode.
-        sp_numbers = {}
-        for index, row in enumerate(selected_sp_rows):
-            if os.path.normcase(os.path.abspath(row.source_path)) not in staged_main_sources:
-                sp_numbers[index] = len(sp_numbers) + 1
-        for index, row in enumerate(selected_sp_rows):
-            if cancel_event and cancel_event.is_set():
-                raise TaskCancelled()
-            warning_start = len(self.encode_warnings)
-            sp_sequence_number = sp_numbers.get(index)
-            if sp_sequence_number is None:
-                record_completed_row(row, 'SP row', warning_start)
-                completed_rows += 1
-                completed_sp_rows += 1
-                continue
-            progress_name = f'SP{sp_sequence_number:02d}'
-            self._progress(
-                row_progress('sp'),
-                self.t('Preparing SP {current}/{total}: {name}').format(
-                    current=sp_sequence_number,
-                    total=len(sp_numbers),
-                    name=progress_name,
-                ),
-            )
+        progress_lock = threading.Lock()
+        row_results: dict[int, EncodeRowResult] = {}
+        completed = [0, 0]
+
+        def run_row(row_index: int, row: EncodeRow, is_sp: bool, sequence: int | None, video: bool) -> EncodeRowResult:
+            row_type = 'SP row' if is_sp else 'Main row'
+            row_service = copy.copy(self)
+            row_service.encode_warnings = []
+            if sequence is None:
+                return completed_row(row_service, row, row_type)
+            progress_name = f'SP{sequence:02d}' if is_sp else f'EP{sequence:02d}'
+            self._progress(text=self.t(
+                'Preparing SP {current}/{total}: {name}' if is_sp else 'Preparing episode {current}/{total}: {name}'
+            ).format(current=sequence, total=sp_number if is_sp else len(main_rows), name=progress_name))
             source_path = os.path.normpath(row.source_path)
             if os.path.exists(row.output_path):
-                self._progress(
-                    text=self.t('Skipping existing output: {path}').format(
-                        path=row.output_path
-                    )
+                if not resume_existing_outputs:
+                    raise FileExistsError(translate_text('Output file already exists: {path}').format(path=row.output_path))
+                valid = os.path.isdir(row.output_path) if os.path.isdir(source_path) else (
+                    os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0
                 )
-                if source_path.lower().endswith('.mkv'):
-                    write_comparison_images_or_warn(
-                        row,
-                        source_path,
-                        completed_rows + 1,
-                        progress_name,
-                    )
-                record_completed_row(row, 'SP row', warning_start)
-                completed_rows += 1
-                completed_sp_rows += 1
-                continue
+                if not valid:
+                    raise FileExistsError(translate_text('Existing resumable output is invalid: {path}').format(
+                        path=row.output_path,
+                    ))
+                self._progress(text=self.t('Skipping existing output: {path}').format(path=row.output_path))
+                if video:
+                    write_comparison_images_or_warn(row_service, row, source_path, row_index + 1, progress_name)
+                return completed_row(row_service, row, row_type)
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             try:
-                if os.path.isdir(source_path):
-                    _copy_path_atomically(source_path, row.output_path, preserve_failure_artifacts=True)
-                elif source_path.lower().endswith('.mka'):
+                if video:
+                    video_name = os.path.basename(row.sp_entry.output_name) if is_sp and row.sp_entry else ''
+                    # VPy preparation rewrites parameters and source paths. Each concurrent row
+                    # gets its own script in the original directory for relative imports.
+                    with source_locks.get(source_key(source_path), nullcontext()):
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise TaskCancelled()
+                        if parallel:
+                            descriptor, script = tempfile.mkstemp(
+                                prefix='.encode-', suffix='.vpy', dir=os.path.dirname(os.path.abspath(row.vpy_path)),
+                            )
+                            os.close(descriptor)
+                            try:
+                                shutil.copyfile(row.vpy_path, script)
+                                execute_video_row(
+                                    row_service, replace(row, vpy_path=script), source_path, progress_name, video_name,
+                                )
+                            finally:
+                                force_remove_file(script)
+                        else:
+                            execute_video_row(row_service, row, source_path, progress_name, video_name)
+                elif source_path.lower().endswith('.mka') and os.path.isfile(source_path):
                     mux_with_audio_conversion(
                         source_path,
                         row.output_path,
-                        selected_audio_tracks=(
-                            row.audio_tracks if request.input_mode == 'remux' else None
-                        ),
-                        selected_subtitle_tracks=(
-                            row.subtitle_tracks if request.input_mode == 'remux' else None
-                        ),
+                        selected_audio_tracks=row.audio_tracks if resume_existing_outputs else None,
+                        selected_subtitle_tracks=row.subtitle_tracks if resume_existing_outputs else None,
                         audio_codec_choices=row.audio_codec_choices,
-                        track_language_overrides=(
-                            row.track_language_overrides
-                            if request.input_mode == 'remux'
-                            else ()
-                        ),
+                        track_language_overrides=row.track_language_overrides if resume_existing_outputs else (),
                         audio_encoding=request.settings.audio_encoding,
-                        wave64_bit_depth=(
-                            24 if request.input_mode == 'bdmv' else 32
-                        ),
-                        audio_timeline_by_track=dict(
-                            getattr(
-                                self, '_remux_fallback_audio_timelines', {}
-                            ).get(
-                                os.path.normcase(os.path.abspath(source_path)),
-                                {},
-                            )
-                        ),
-                        detect_audio_gaps=(request.input_mode == 'remux'),
+                        wave64_bit_depth=32 if resume_existing_outputs else 24,
+                        audio_timeline_by_track=dict(getattr(self, '_remux_fallback_audio_timelines', {}).get(
+                            os.path.normcase(os.path.abspath(source_path)), {},
+                        )),
+                        detect_audio_gaps=resume_existing_outputs,
                         preserve_failure_artifacts=True,
-                        progress_callback=lambda operation, name=progress_name: self._progress(
-                            text=self.t('{operation}: {name}').format(
-                                operation=operation,
-                                name=name,
-                            )
-                        ),
-                    )
-                elif source_path.lower().endswith('.mkv'):
-                    original_name = os.path.basename(
-                        row.sp_entry.output_name
-                        if row.sp_entry is not None
-                        else row.output_path
-                    )
-                    execute_video_row(
-                        row,
-                        source_path,
-                        progress_name,
-                        video_progress_name=original_name,
+                        progress_callback=lambda operation: self._progress(text=self.t('{operation}: {name}').format(
+                            operation=operation, name=progress_name,
+                        )),
                     )
                 else:
                     _copy_path_atomically(source_path, row.output_path, preserve_failure_artifacts=True)
             except (TaskCancelled, FileExistsError):
                 raise
             except Exception as error:
-                record_failed_row(row, 'SP row', warning_start, error)
-            else:
-                if source_path.lower().endswith('.mkv'):
-                    write_comparison_images_or_warn(
-                        row,
-                        source_path,
-                        completed_rows + 1,
-                        progress_name,
-                    )
-                record_completed_row(row, 'SP row', warning_start)
-            completed_rows += 1
-            completed_sp_rows += 1
+                if isinstance(error.__cause__, FileExistsError):
+                    raise
+                return failed_row(row_service, row, row_type, error)
+            if video:
+                write_comparison_images_or_warn(row_service, row, source_path, row_index + 1, progress_name)
+            return completed_row(row_service, row, row_type)
+
+        def run_lane(queue) -> None:
+            with mkvmerge_cancellation_scope(cancel_event):
+                for row_index, row, is_sp, sequence, video, _lane in queue:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise TaskCancelled()
+                    result = run_row(row_index, row, is_sp, sequence, video)
+                    with progress_lock:
+                        row_results[row_index] = result
+                        completed[is_sp] += 1
+                        if weighted_progress:
+                            progress = (
+                                main_progress_span * completed[0] / max(1, len(main_rows))
+                                + sp_progress_span * completed[1] / max(1, len(selected_sp_rows))
+                            )
+                        else:
+                            progress = progress_span * sum(completed) / max(1, len(planned_rows))
+                        self._progress(progress_base + int(progress))
+
+        if parallel:
+            with ThreadPoolExecutor(max_workers=len(queues)) as executor:
+                futures = [executor.submit(copy_context().run, run_lane, queue) for queue in queues.values()]
+                try:
+                    for future in as_completed(futures):
+                        future.result()
+                except BaseException:
+                    cancel_event.set()
+                    raise
+        else:
+            run_lane(next(iter(queues.values())))
+        ordered_results = tuple(row_results[index] for index in range(len(planned_rows)))
+        self.encode_warnings.extend(warning for row in ordered_results for warning in row.warnings)
 
         if companion_files:
             self._progress(text=self.t('Copying companion files'))
@@ -2152,8 +2105,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             else progress_base + progress_span
         )
         self._progress(final_progress, 'Done')
-        batch_result = EncodeBatchResult(tuple(row_results))
-        return batch_result
+        return EncodeBatchResult(ordered_results)
 
     def episodes_encode(
             self,

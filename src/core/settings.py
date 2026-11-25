@@ -75,11 +75,11 @@ SUBTITLE_LABELS = ["select", "path", "sub_duration", "ep_duration", "bdmv_index"
 MKV_LABELS = ["path", "duration"]
 REMUX_LABELS = ["sub_path", "language", "ep_duration", "bdmv_index", "start_at_chapter", "end_at_chapter", "m2ts_file", "m2ts_file_detail", "output_name", "play"]
 DIY_REMUX_LABELS = ["sub_path", "language", "ep_duration", "bdmv_index", "start_at_chapter", "end_at_chapter", "m2ts_file", "m2ts_file_detail", "play"]
-ENCODE_LABELS = ["sub_path", "language", "ep_duration", "bdmv_index", "start_at_chapter", "end_at_chapter", "m2ts_file", "m2ts_file_detail", "output_name", "vpy_path", "edit_vpy", "preview_script", "play"]
-ENCODE_SP_LABELS = ["select", "bdmv_index", "mpls_file", "m2ts_file", "m2ts_file_detail", "m2ts_type", "duration", "output_name", "tracks", "vpy_path", "edit_vpy", "preview_script", "play"]
+ENCODE_LABELS = ["sub_path", "language", "ep_duration", "bdmv_index", "start_at_chapter", "end_at_chapter", "m2ts_file", "m2ts_file_detail", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "video_encode_device"]
+ENCODE_SP_LABELS = ["select", "bdmv_index", "mpls_file", "m2ts_file", "m2ts_file_detail", "m2ts_type", "duration", "output_name", "tracks", "vpy_path", "edit_vpy", "preview_script", "play", "video_encode_device"]
 DIY_SP_LABELS = ["select", "bdmv_index", "mpls_file", "m2ts_file", "m2ts_file_detail", "m2ts_type", "duration", "tracks", "vpy_path", "edit_vpy", "preview_script", "play"]
-ENCODE_REMUX_LABELS = ["sub_path", "language", "ep_duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments"]
-ENCODE_REMUX_SP_LABELS = ["duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments"]
+ENCODE_REMUX_LABELS = ["sub_path", "language", "ep_duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments", "video_encode_device"]
+ENCODE_REMUX_SP_LABELS = ["duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments", "video_encode_device"]
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60
 CURRENT_UI_LANGUAGE = "en"
 

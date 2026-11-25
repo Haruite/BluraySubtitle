@@ -15,6 +15,9 @@ from tools.macos_macho import inspect_macho
 from tools.vapoursynth_plugin_releases import SOURCES, latest_tag
 
 
+GPU_CAPABILITIES_SOURCE = Path(__file__).with_name("gpu_encode_capabilities.cpp")
+
+
 def tags(repo, pattern):
     lines = output("git", "ls-remote", "--refs", "--tags", repo)
     entries = [
@@ -314,9 +317,17 @@ def build_ffmpeg(name, ctx, src, work, stage):
         "--enable-libbluray",
         "--enable-libass",
         "--enable-videotoolbox",
+        "--enable-vulkan",
+        "--enable-vulkan-static",
+        "--enable-encoder=h264_videotoolbox,hevc_videotoolbox,prores_videotoolbox,ffv1_vulkan",
         "--enable-audiotoolbox",
         "--disable-autodetect",
         "--enable-zlib",
+    )
+    ctx.run(
+        "clang++", "-std=c++17", "-O2", "-I", ctx.deps / "include", GPU_CAPABILITIES_SOURCE,
+        "-framework", "VideoToolbox", "-framework", "CoreMedia", "-framework", "CoreFoundation",
+        "-o", stage / "bin/bluraysub-gpu-capabilities",
     )
 
 
@@ -437,14 +448,18 @@ def build_media(ctx, versions):
         # see optional libraries in the sysroot, especially MKVToolNix and x264.
         packages = {
             "libudfread": ("pkg-config", "autoconf", "automake", "libtool"),
-            "ffmpeg": ("pkg-config", "nasm", "libopus", "dav1d-devel", "libass", "zlib"),
+            "ffmpeg": ("pkg-config", "nasm", "libopus", "dav1d-devel", "libass", "zlib", "libvulkan-headers",
+                       "libvulkan-loader", "shaderc"),
             "x265": ("nasm",), "svt-av1": ("nasm",), "vsedit": (), "7zip": (), "moltenvk": (),
             "dovi": (), "hdr10plus": (), "sse2neon": (),
         }.get(name)
         helpers = (Build.cmake,) if cmake else ()
         provider = ctx.hdr.get(name)
         revision = [release, provider] if provider else release
+        recipe = recipe_digest(install, builder, *helpers)
+        if builder == build_ffmpeg:
+            recipe += ':' + digest(GPU_CAPABILITIES_SOURCE)
         downloaded = builder in (install_7zip, install_moltenvk, install_sse2neon) or (provider and "url" in provider)
-        ctx.component(name, revision, install, dependencies=dependencies, recipe=recipe_digest(install, builder, *helpers),
+        ctx.component(name, revision, install, dependencies=dependencies, recipe=recipe,
                       scope="download" if downloaded else "native",
                       packages=packages, build_tools=build_tools)

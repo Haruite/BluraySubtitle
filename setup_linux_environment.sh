@@ -56,7 +56,10 @@ LSMASH_SOURCE_REPOSITORY="https://github.com/l-smash/l-smash.git"
 LSMASH_COMPATIBLE_TAG_PATTERN='^[vV]?2([.][0-9]+)+$'
 MESON_MIN_VERSION="1.4.0"
 X264_CONFIGURE_OPTIONS=(--enable-static --bit-depth=all --chroma-format=all --enable-lto)
-MPV_FFMPEG_OPTIONS=(--enable-libbluray --enable-libdav1d --enable-libopus --enable-gnutls --enable-vulkan)
+MPV_FFMPEG_OPTIONS=(--enable-libbluray --enable-libdav1d --enable-libopus --enable-gnutls --enable-vulkan --enable-encoder=ffv1_vulkan)
+FFMPEG_NVENC_HEADERS="https://github.com/FFmpeg/nv-codec-headers.git"
+FFMPEG_AMF_HEADERS="https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git"
+FFMPEG_HARDWARE_NOTICES="/usr/local/share/doc/bluraysubtitle-ffmpeg/hardware.txt"
 MPV_FFMPEG_PACKAGE_OPTIONS=(--disable-static --enable-shared)
 MPV_OPTIONS=(-Dlibbluray=enabled -Dlua=luajit -Dvapoursynth=enabled -Dmanpage-build=enabled)
 MPV_VULKAN_OPTION=-Dvulkan=enabled
@@ -252,6 +255,7 @@ for name in names:
     printf -v "$name" '%s' "$value"
   done <<< "$output"
 
+  GPU_CAPABILITIES_PATH="$(dirname -- "$FFMPEG_PATH")/bluraysub-gpu-capabilities"
   X264_VERSION_FILE="$(dirname -- "$X264_PATH")/x264-version.txt"
   X265_FEATURE_FILE="$(dirname -- "$X265_PATH")/x265-build-features.txt"
   VSEDIT_BINARY_PATH="${VSEDIT_PATH}-bin"
@@ -779,6 +783,7 @@ unset BLURAYSUBTITLE_GITHUB_TOKEN
 check_setup_package_versions() {
   local -a requirements=(libvulkan-dev=1.3.277 libavcodec-dev=7.0 libplacebo-dev=6.338.0
                          libdav1d-dev=1.0.0 "meson=$MESON_MIN_VERSION" python3-docutils=0.20)
+  if [[ "$APT_ARCH" == amd64 ]]; then requirements+=(libvpl-dev=2.6); fi
   if ! "$package_build"; then requirements+=(qt6-base-dev=6.4.0); fi
   local policy entry package minimum candidate installed
   local -a missing=()
@@ -1366,10 +1371,22 @@ __installed_ffmpeg_version() {
     | sed -nE "1s/^ff(mpeg|probe) version n?([0-9]+([.][0-9]+){1,3})${suffix}([[:space:]].*)?$/\2/p"
 }
 
-__ffmpeg_has_libopus() {
+__ffmpeg_has_required_encoders() {
   local executable="$1"
   [[ -x "$executable" ]] || return 1
-  "$executable" -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null
+  [[ -x "$GPU_CAPABILITIES_PATH" && "$("$GPU_CAPABILITIES_PATH" --version)" == 2 ]] || return 1
+  local encoders encoder backend codec
+  local backends=(nvenc)
+  if [[ "$APT_ARCH" == amd64 ]]; then backends+=(qsv amf); fi
+  encoders="$("$executable" -hide_banner -encoders)" || return 1
+  grep -Eq '^[[:space:]]*A[^[:space:]]*[[:space:]]+libopus[[:space:]]' <<< "$encoders" || return 1
+  grep -Eq '^[[:space:]]*V[^[:space:]]*[[:space:]]+ffv1_vulkan[[:space:]]' <<< "$encoders" || return 1
+  for backend in "${backends[@]}"; do
+    for codec in h264 hevc av1; do
+      encoder="${codec}_${backend}"
+      grep -Eq "^[[:space:]]*V[^[:space:]]*[[:space:]]+${encoder}[[:space:]]" <<< "$encoders" || return 1
+    done
+  done
 }
 
 test_mpv_vapoursynth() (
@@ -1416,7 +1433,7 @@ __mpv_tools_have_vulkan() {
 }
 
 install_mpv() {
-  log "$(msg 'Installing mpv with VapourSynth and stable FFmpeg / FFprobe' '安装支持 VapourSynth 的 mpv 与稳定版 FFmpeg / FFprobe')"
+  log "$(msg 'Installing mpv with VapourSynth and FFmpeg / FFprobe with hardware encoders' '安装支持 VapourSynth 的 mpv 及包含硬件编码器的 FFmpeg / FFprobe')"
 
   local mpv_tag required_mpv_version shared_ffmpeg_dir=/usr/local/lib/bluraysubtitle-ffmpeg
   mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')" || return $?
@@ -1434,7 +1451,7 @@ install_mpv() {
   if [[ -n "$installed_ffmpeg_version" && -n "$installed_ffprobe_version" ]] \
     && dpkg --compare-versions "$installed_ffmpeg_version" "$ffmpeg_version_relation" "$target_ffmpeg_version" \
     && dpkg --compare-versions "$installed_ffprobe_version" "$ffmpeg_version_relation" "$target_ffmpeg_version" \
-    && __ffmpeg_has_libopus "$FFMPEG_PATH"; then
+    && __ffmpeg_has_required_encoders "$FFMPEG_PATH"; then
     ffmpeg_is_current="true"
   fi
 
@@ -1452,10 +1469,10 @@ install_mpv() {
           log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
           install_libdovi
         fi
-        log "$(msg "mpv with working VapourSynth and FFmpeg / FFprobe with libopus satisfy the requirements, skipping" "mpv 的 VapourSynth 滤镜和 FFmpeg / FFprobe 的 libopus 支持均满足要求，跳过编译安装")"
+        log "$(msg 'mpv, VapourSynth and the FFmpeg encoders satisfy the requirements' 'mpv、VapourSynth 和 FFmpeg 编码器已满足要求')"
         return 0
       fi
-      log "$(msg "Rebuilding mpv with VapourSynth and FFmpeg / FFprobe ${target_ffmpeg_version} with libopus" "重新编译支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe ${target_ffmpeg_version}")"
+      log "$(msg "Rebuilding mpv with VapourSynth and FFmpeg / FFprobe ${target_ffmpeg_version}" "重新编译支持 VapourSynth 的 mpv 及 FFmpeg / FFprobe ${target_ffmpeg_version}")"
     else
       log "$(msg "System mpv version is too old (${current_mpv_version:-unknown} < ${required_mpv_version}), rebuilding from source" "检测到系统 mpv 版本较旧（${current_mpv_version:-unknown} < ${required_mpv_version}），将从源码编译升级")"
     fi
@@ -1483,7 +1500,7 @@ install_mpv() {
     libdrm-dev libgbm-dev libgnutls28-dev libvulkan-dev spirv-headers python3-docutils curl xz-utils
   )
   if [[ "$APT_ARCH" == amd64 ]]; then
-    mpv_deps+=(yasm nasm)
+    mpv_deps+=(yasm nasm libvpl-dev pciutils)
   fi
 
   local missing_deps=()
@@ -1526,7 +1543,29 @@ install_mpv() {
     tmux_run "$(msg "Download libplacebo ${libplacebo_tag}" "下载 libplacebo ${libplacebo_tag}")" \
       download_git_tree https://github.com/haasn/libplacebo.git "$libplacebo_tag" libplacebo || exit 1
 
+    local nvenc_tag amf_tag hardware_prefix="$PWD/ffmpeg-hardware"
+    nvenc_tag="$(latest_stable_tag "$FFMPEG_NVENC_HEADERS" '^[nN][0-9]+([.][0-9]+)+$' 'n*')" || exit 1
+    download_source_archive "nv-codec-headers $nvenc_tag" \
+      "$(github_archive_url "$FFMPEG_NVENC_HEADERS" "refs/tags/$nvenc_tag")" nv-codec-headers || exit 1
+    make -C nv-codec-headers install PREFIX="$hardware_prefix" || exit 1
+    printf 'nv-codec-headers %s\nSource: %s\n\n' "$nvenc_tag" "$FFMPEG_NVENC_HEADERS" > hardware.txt
+    for header in nv-codec-headers/include/ffnvcodec/*.h; do
+      printf '%s\n' "${header##*/}" >> hardware.txt
+      sed -n '1,/^ \*\/$/p' "$header" >> hardware.txt || exit 1
+    done
+    local hardware_options=(--enable-ffnvcodec --enable-nvenc)
+    if [[ "$APT_ARCH" == amd64 ]]; then
+      hardware_options+=(--enable-vaapi --enable-libvpl --enable-amf)
+      amf_tag="$(latest_stable_tag "$FFMPEG_AMF_HEADERS")" || exit 1
+      download_source_archive "AMF headers $amf_tag" \
+        "$(github_archive_url "$FFMPEG_AMF_HEADERS" "refs/tags/$amf_tag")" amf || exit 1
+      cp -R amf/amf/public/include "$hardware_prefix/include/AMF" || exit 1
+      printf '\nAMF headers %s\nSource: %s\n\n' "$amf_tag" "$FFMPEG_AMF_HEADERS" >> hardware.txt
+      cat amf/LICENSE.txt >> hardware.txt || exit 1
+    fi
+    export CPATH="$hardware_prefix/include${CPATH:+:$CPATH}"
     printf '%s\n' "${MPV_FFMPEG_OPTIONS[@]}" > ffmpeg_options || exit 1
+    printf '%s\n' "${hardware_options[@]}" >> ffmpeg_options || exit 1
     if "$package_build"; then
       # Keep the three executables on one redistributable FFmpeg runtime.
       printf '%s\n' "${MPV_FFMPEG_PACKAGE_OPTIONS[@]}" >> ffmpeg_options || exit 1
@@ -1537,8 +1576,18 @@ install_mpv() {
     printf '%s\n' "$MPV_VULKAN_OPTION" > libplacebo_options || exit 1
     printf '%s\n' "$MPV_VULKAN_OPTION" >> mpv_options || exit 1
 
-    export PKG_CONFIG_PATH="$pkg_config_path"
+    export PKG_CONFIG_PATH="$hardware_prefix/lib/pkgconfig:$pkg_config_path"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+    local gpu_probe_flags=(-DBLURAY_GPU_NVENC)
+    local gpu_probe_libraries=()
+    if [[ "$APT_ARCH" == amd64 ]]; then
+      gpu_probe_flags+=(-DBLURAY_GPU_QSV -DBLURAY_GPU_AMF)
+      local gpu_pkg_flags
+      gpu_pkg_flags="$(pkg-config --cflags --libs vpl libva-drm)" || exit 1
+      read -r -a gpu_probe_libraries <<< "$gpu_pkg_flags"
+    fi
+    "${CXX:-c++}" -std=c++17 -O2 "${gpu_probe_flags[@]}" "$SETUP_ROOT/tools/gpu_encode_capabilities.cpp" \
+      -o bluraysub-gpu-capabilities "${gpu_probe_libraries[@]}" -ldl || exit 1
     pkg-config --atleast-version=56 vapoursynth \
       || die "$(msg 'mpv requires VapourSynth VSScript development files version 56 or later' 'mpv 需要 VapourSynth VSScript 56 或更高版本的开发文件')"
 
@@ -1551,6 +1600,7 @@ install_mpv() {
     if "$package_build"; then
       local shared_stage="$component_stage$shared_ffmpeg_dir"
       install -d -m 0755 "$shared_stage" || exit 1
+      install -D -m 0644 hardware.txt "$component_stage$FFMPEG_HARDWARE_NOTICES" || exit 1
       local library
       for library in build_libs/lib/lib{av*,sw*}.so.*; do
         # Install each SONAME once. The linker does not need the other aliases.
@@ -1562,6 +1612,7 @@ install_mpv() {
     install_component "mpv-build install" env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
+    install_configured_executable bluraysub-gpu-capabilities "$GPU_CAPABILITIES_PATH" || exit 1
     if ! "$package_build" && [[ -n "$MPV_PATH" ]]; then
       install_configured_executable "$PWD/mpv/build/mpv" "$MPV_PATH" || exit 1
     fi
@@ -1570,8 +1621,8 @@ install_mpv() {
   installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" || true)"
   installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" || true)"
   if [[ "$installed_ffmpeg_version" != "$target_ffmpeg_version" || "$installed_ffprobe_version" != "$target_ffmpeg_version" ]] \
-    || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
-    die "$(msg "Installed FFmpeg / FFprobe version or libopus support verification failed. Build files were kept in ${build_dir}" "安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败。构建文件保留在 ${build_dir}")"
+    || ! __ffmpeg_has_required_encoders "$FFMPEG_PATH"; then
+    die "$(msg "Installed FFmpeg / FFprobe version or encoder verification failed. Build files were kept in ${build_dir}" "安装后的 FFmpeg / FFprobe 版本或编码器校验失败。构建文件保留在 ${build_dir}")"
   fi
   if "$package_build" && ! __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" "$(command -v mpv)"; then
     die "$(msg 'mpv, FFmpeg and FFprobe did not link to the shared FFmpeg runtime' 'mpv、FFmpeg 或 FFprobe 未链接到同一套 FFmpeg 运行库')"
@@ -1580,7 +1631,7 @@ install_mpv() {
     die "$(msg 'The installed mpv and FFmpeg must both support Vulkan' '安装后的 mpv 和 FFmpeg 必须均支持 Vulkan')"
   fi
   rm -rf "$build_dir"
-  log "$(msg "mpv with VapourSynth and FFmpeg / FFprobe with libopus installed (${installed_ffmpeg_version}/${installed_ffprobe_version})" "已安装支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
+  log "$(msg "Installed mpv with VapourSynth and FFmpeg / FFprobe (${installed_ffmpeg_version}/${installed_ffprobe_version})" "已安装支持 VapourSynth 的 mpv 及 FFmpeg / FFprobe（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
 }
 
 build_mpv_uosc_archive() (
@@ -3678,6 +3729,10 @@ collect_linux_build_inputs() {
       ;;
     mpv-ffmpeg)
       cache_build_tag "$FFMPEG_SOURCE_REPOSITORY" "" '^n[0-9]+([.][0-9]+)+$' 'n*' || return $?
+      cache_build_tag "$FFMPEG_NVENC_HEADERS" "" '^[nN][0-9]+([.][0-9]+)+$' 'n*' || return $?
+      if [[ "$APT_ARCH" == amd64 ]]; then
+        cache_build_tag "$FFMPEG_AMF_HEADERS" || return $?
+      fi
       cache_build_tag https://github.com/mpv-player/mpv.git "" '^v[0-9]+([.][0-9]+)+$' 'v*' || return $?
       cache_build_tag https://github.com/libass/libass.git "" '^[0-9]+([.][0-9]+)+$' || return $?
       cache_build_tag https://github.com/haasn/libplacebo.git "" '^v[0-9]+([.][0-9]+)+$' 'v*' || return $?
@@ -3951,7 +4006,7 @@ fi
 select_vapoursynth_python
 install_bluray_python_deps
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
-declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2 [ispc]=2 [vs-nlm-ispc]=3)
+declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [mpv-ffmpeg]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2 [ispc]=2 [vs-nlm-ispc]=3)
 if [[ "$APT_ARCH" == arm64 ]]; then linux_recipe_revisions[sangnom]=2; fi
 declare -A vs_plugin_tags=() vs_plugin_sources=() vs_plugin_digests=()
 if "$package_build"; then
@@ -4002,8 +4057,9 @@ cached_linux_build vapoursynth-sdk install_vapoursynth system \
 if "$package_build" || [[ "$APT_ARCH" == arm64 ]]; then
   vapoursynth_cache_abi="$(sha256sum "$VAPOURSYNTH_VSSCRIPT" /usr/local/include/vapoursynth/*.h | sha256sum)"
 fi
-cached_linux_build mpv-ffmpeg install_mpv system "$MESON_MIN_VERSION $DOVI_TOOL_VERSION $vapoursynth_cache_abi" \
-  "$FFMPEG_PATH" "$FFPROBE_PATH" /usr/bin/mpv /usr/include/libdovi/rpu_parser.h
+cached_linux_build mpv-ffmpeg install_mpv system \
+  "$MESON_MIN_VERSION $DOVI_TOOL_VERSION $vapoursynth_cache_abi $(sha256sum < "$SETUP_ROOT/tools/gpu_encode_capabilities.cpp")" \
+  "$FFMPEG_PATH" "$FFPROBE_PATH" "$GPU_CAPABILITIES_PATH" /usr/bin/mpv /usr/include/libdovi/rpu_parser.h "$FFMPEG_HARDWARE_NOTICES"
 # Build caches contain the native executable. Restore an existing Desktop launcher after updating it.
 if ! "$package_build" || [[ -f /usr/local/libexec/bluraysubtitle/mpv_runtime.py ]]; then
   bluray_sudo /usr/bin/python3 -B "$SETUP_ROOT/tools/mpv/install.py" --install-launcher

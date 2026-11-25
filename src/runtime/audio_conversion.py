@@ -22,6 +22,7 @@ from src.exports.utils import (
     run_command,
 )
 from src.runtime import TaskCancelled
+from src.runtime.encode_source import SourceColorMetadata, matroska_static_hdr_arguments
 
 
 @dataclass(frozen=True)
@@ -1676,6 +1677,7 @@ def mux_with_audio_conversion(
         clean_audio_tracks: bool = True,
         track_language_overrides: tuple[tuple[str, str], ...] = (),
         encoded_video_file: str = '',
+        encoded_video_hdr: SourceColorMetadata | None = None,
         video_timestamps_file: str = '',
         subtitle_file: str = '',
         subtitle_language: str = '',
@@ -2197,6 +2199,7 @@ def mux_with_audio_conversion(
             if video_timestamps_file:
                 # These are absolute source timestamps, including the video delay.
                 input_arguments.extend(['--timestamps', f'0:{video_timestamps_file}'])
+            input_arguments.extend(matroska_static_hdr_arguments(encoded_video_hdr))
             input_arguments.append(encoded_path)
 
         external_subtitle_input = -1

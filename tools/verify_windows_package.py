@@ -86,6 +86,13 @@ def verify(bundle: Path, work: Path) -> None:
             raise RuntimeError(f"{program.name} returned {result.returncode}: {result.stdout}{result.stderr}")
         return result.stdout + result.stderr
 
+    if not compatibility:
+        if run(internal / "bluraysub-gpu-capabilities.exe", "--version").strip() != "2":
+            raise RuntimeError("The packaged GPU capability query failed its version check")
+        encoders = run(internal / "ffmpeg.exe", "-hide_banner", "-encoders")
+        if not any(line.split()[1:2] == ["ffv1_vulkan"] for line in encoders.splitlines()):
+            raise RuntimeError("FFmpeg is missing the Vulkan FFV1 encoder")
+
     for executable in MKV_PROGRAMS:
         for location in (internal, mkv):
             output = run(location / executable, "--version")

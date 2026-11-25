@@ -18,6 +18,7 @@ PROGRAMS = (
     "7zz",
     "ffmpeg",
     "ffprobe",
+    "bluraysub-gpu-capabilities",
     "x264",
     "x265",
     "SvtAv1EncApp",

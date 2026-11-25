@@ -54,6 +54,7 @@
     "bit_depth": "10",
     "preset": "Balanced",
     "custom_presets": [],
+    "gpu_enabled": false,
     "lossless_audio_codec": "flac",
     "subtitle_mode": "external",
     "use_getnative": true,

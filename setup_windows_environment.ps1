@@ -216,6 +216,8 @@ $script:FfmpegConfigureOptions = @(
     # With autodetection disabled, FFmpeg only probes for iconv in libc.
     "--extra-libs=-liconv"
 )
+$script:FfmpegHardwarePackages = @()
+$script:FfmpegHardwareBackends = @()
 
 function Get-SetupText {
     param(
@@ -337,14 +339,30 @@ function Initialize-SetupArchitecture {
     $script:VisualStudioBuildEnvironment = $null
     $script:FfmpegConfigureOptions = @("--target-os=mingw32", "--arch=$($script:MingwHost.Split('-')[0])") +
         $script:FfmpegConfigureOptions
-    if ($script:IsArm64) {
+    if (-not $script:IsArm64 -and -not $CompatibilityWorkDirectory) {
+        $script:FfmpegHardwarePackages = @("ffnvcodec-headers", "libvpl", "amf-headers")
+        $script:FfmpegHardwareBackends = @("nvenc", "qsv", "amf")
         $script:FfmpegConfigureOptions += @(
+            "--enable-d3d11va", "--enable-ffnvcodec", "--enable-nvenc", "--enable-libvpl", "--enable-amf",
+            # MSYS2's vpl.pc omits the C++ runtime needed by the static oneVPL dispatcher.
+            "--extra-libs=-lstdc++"
+        )
+    }
+    if ($script:IsArm64) {
+        $script:FfmpegHardwarePackages = @("ffnvcodec-headers")
+        $script:FfmpegHardwareBackends = @("nvenc")
+        $script:FfmpegConfigureOptions += @(
+            "--enable-d3d11va", "--enable-ffnvcodec", "--enable-nvenc",
             "--cc=clang", "--cxx=clang++", "--ar=llvm-ar", "--nm=llvm-nm", "--ranlib=llvm-ranlib",
             "--strip=llvm-strip", "--windres=llvm-windres"
         )
         $script:NativeToolCacheRoot = Join-Path $script:NativeToolCacheRoot "arm64"
         $script:BuildToolchains.msvc = @("git", "visual-studio-build-tools", "cmake", "ninja")
         $script:BuildToolchains["msys2-cmake"] = $script:BuildToolchains.msys2 + @("cmake", "ninja")
+    }
+    if ($script:FfmpegHardwareBackends.Count -gt 0) {
+        $script:FfmpegHardwarePackages += @("vulkan-headers", "glslang")
+        $script:FfmpegConfigureOptions += @("--enable-vulkan", "--enable-encoder=ffv1_vulkan")
     }
 }
 
@@ -1490,6 +1508,10 @@ function Get-ComponentBuildCache {
         "ffmpeg" {
             $files = @($script:ToolPaths.Ffmpeg, $script:ToolPaths.Ffprobe, $script:ToolPaths.FfmpegNotices)
             $options += $script:FfmpegConfigureOptions
+            if ($script:FfmpegHardwareBackends.Count -gt 0) {
+                $files += $script:ToolPaths.GpuCapabilities
+                $sourceInputs += (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory 'tools\gpu_encode_capabilities.cpp')).Hash
+            }
         }
         "flac" { $files = @($script:ToolPaths.Flac, $script:ToolPaths.FlacLibrary) }
         "tsmuxer" { $files = @($script:ToolPaths.TsMuxer) }
@@ -1851,6 +1873,7 @@ function Initialize-ConfiguredToolPaths {
         $script:ToolPaths[$name] = [string]$configured.PSObject.Properties[$pathSettings[$name]].Value
     }
     $script:ToolPaths["FfmpegNotices"] = Join-Path (Split-Path -Parent $script:ToolPaths.Ffmpeg) "ffmpeg-licenses.txt"
+    $script:ToolPaths["GpuCapabilities"] = Join-Path (Split-Path -Parent $script:ToolPaths.Ffmpeg) "bluraysub-gpu-capabilities.exe"
     $script:ToolPaths["FlacLibrary"] = Join-Path (Split-Path -Parent $script:ToolPaths.Flac) "libFLAC.dll"
     $script:ToolPaths["X264Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X264) "x264-version.txt"
     $script:ToolPaths["X265Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X265) "x265-version.txt"
@@ -3113,6 +3136,23 @@ function Test-Ffmpeg {
         ($ExpectedVersion -and (Compare-SetupVersion $encoder.Version $ExpectedVersion) -ne 0)) {
         return $false
     }
+    if ($script:FfmpegHardwareBackends.Count -gt 0) {
+        $capabilities = Join-Path (Split-Path -Parent $Ffmpeg) "bluraysub-gpu-capabilities.exe"
+        if (-not (Test-SetupBinary $capabilities)) { return $false }
+        try {
+            if ((Invoke-SetupCommand -FilePath $capabilities -Arguments @("--version")) -ne "2") { return $false }
+        }
+        catch {
+            return $false
+        }
+        $encoders = Invoke-SetupCommand -FilePath $Ffmpeg -Arguments @("-hide_banner", "-encoders")
+        if ($encoders -notmatch '(?m)^\s*V\S*\s+ffv1_vulkan\s') { return $false }
+        foreach ($backend in $script:FfmpegHardwareBackends) {
+            foreach ($codec in @("h264", "hevc", "av1")) {
+                if ($encoders -notmatch "(?m)^\s*V\S*\s+${codec}_${backend}\s") { return $false }
+            }
+        }
+    }
     if ($Mode -ne "Build") {
         return $true
     }
@@ -3137,7 +3177,8 @@ function Install-Ffmpeg {
     param([string]$Version)
 
     $packagePrefix = $script:MingwPackagePrefix
-    $packages = @("dav1d", "opus", "bzip2", "libiconv", "xz", "zlib" | ForEach-Object { "$packagePrefix$_" })
+    $libraries = @("dav1d", "opus", "bzip2", "libiconv", "xz", "zlib") + $script:FfmpegHardwarePackages
+    $packages = @($libraries | ForEach-Object { "$packagePrefix$_" })
     Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S") + $packages) | Out-Null
 
     $release = Get-FfmpegRelease
@@ -3150,26 +3191,66 @@ function Install-Ffmpeg {
     # FFmpeg checks FF_VERSION before accepting a revision from an enclosing Git checkout.
     [IO.File]::WriteAllText((Join-Path $sourceRoot "FF_VERSION"), "$Version`n", $script:Utf8Encoding)
 
+    if ($script:IsArm64) {
+        # The native ARM64 NVIDIA driver uses nvEncodeAPIa64.dll.
+        $mingwRoot = Join-Path $script:ToolPaths.Msys2Root $script:MsysPrefix
+        $headers = Join-Path $buildRoot "arm64-ffnvcodec"
+        $include = Join-Path $headers "include"
+        $pkgconfig = Join-Path $headers "lib\pkgconfig"
+        New-Item -ItemType Directory -Path $include, $pkgconfig -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $mingwRoot "include\ffnvcodec") -Destination $include -Recurse
+        $loader = Join-Path $include "ffnvcodec\dynlink_loader.h"
+        $loaderText = [IO.File]::ReadAllText($loader)
+        $loaderText = $loaderText.Replace('"nvEncodeAPI64.dll"', '"nvEncodeAPIa64.dll"').Replace('"nvEncodeAPI.dll"', '"nvEncodeAPIa64.dll"')
+        if (-not $loaderText.Contains('"nvEncodeAPIa64.dll"')) {
+            throw (Get-SetupText "The NVENC headers do not define an expected Windows driver name." "NVENC 头文件未定义预期的 Windows 驱动名称。")
+        }
+        [IO.File]::WriteAllText($loader, $loaderText, $script:Utf8Encoding)
+        $metadata = [IO.File]::ReadAllText((Join-Path $mingwRoot "lib\pkgconfig\ffnvcodec.pc"))
+        $metadata = $metadata -creplace '(?m)^prefix=[^\r\n]*', 'prefix=${pcfiledir}/../..'
+        [IO.File]::WriteAllText((Join-Path $pkgconfig "ffnvcodec.pc"), $metadata, $script:Utf8Encoding)
+    }
+
     $buildScriptContent = @'
 set -eu
 cd "$1"
 jobs=$2
-shift 2
+probe_source=$3
+probe_profile=$4
+shift 4
 export TMPDIR=.
+if [ -d arm64-ffnvcodec ]; then
+    export PKG_CONFIG_PATH="$(cygpath -m "$PWD/arm64-ffnvcodec/lib/pkgconfig")"
+fi
 /usr/bin/dash.exe src/configure --pkg-config="$PKG_CONFIG" "$@" || {
     if [ -f ffbuild/config.log ]; then tail -n 80 ffbuild/config.log; fi
     exit 1
 }
 make -j"$jobs" SHELL=/usr/bin/dash.exe ffmpeg.exe ffprobe.exe
+case "$probe_profile" in
+    arm64)
+        clang++ -std=c++17 -O2 -static -DBLURAY_GPU_NVENC $("$PKG_CONFIG" --cflags ffnvcodec) \
+            "$probe_source" -o bluraysub-gpu-capabilities.exe -ld3d11 -ldxgi
+        ;;
+    x64)
+        g++ -std=c++17 -O2 -static -DBLURAY_GPU_NVENC -DBLURAY_GPU_QSV -DBLURAY_GPU_AMF -DBLURAY_GPU_MF \
+            "$probe_source" -o bluraysub-gpu-capabilities.exe $("$PKG_CONFIG" --static --cflags --libs ffnvcodec vpl) \
+            -ld3d11 -ldxgi -lmfuuid -lole32 -lstrmiids
+        ;;
+esac
 '@
     $buildScript = Write-SetupTempScript -Name "build-ffmpeg.sh" -Content $buildScriptContent
+    $probeProfile = if ($script:IsArm64) { "arm64" } elseif ($script:FfmpegHardwareBackends.Count -gt 0) { "x64" } else { "none" }
+    $probeSource = Join-Path $script:SetupDirectory "tools\gpu_encode_capabilities.cpp"
     Invoke-SetupBuildCommand `
         -DisplayName "official FFmpeg and FFprobe source build" `
         -FilePath (Join-Path $script:ToolPaths.Msys2Root "usr\bin\dash.exe") `
         -Arguments (@(
             (ConvertTo-Msys2Path $buildScript),
             (ConvertTo-Msys2Path $buildRoot),
-            [string]$script:BuildJobs
+            [string]$script:BuildJobs,
+            (ConvertTo-Msys2Path $probeSource),
+            $probeProfile
         ) + $script:FfmpegConfigureOptions)
 
     $installedPackages = Invoke-Msys2Pacman -Arguments (@("-Q") + $packages)
@@ -3206,6 +3287,9 @@ make -j"$jobs" SHELL=/usr/bin/dash.exe ffmpeg.exe ffprobe.exe
     Install-ConfiguredFile -Source $noticesPath -Destination $script:ToolPaths.FfmpegNotices
     Install-ConfiguredFile -Source $ffmpegExecutable -Destination $script:ToolPaths.Ffmpeg
     Install-ConfiguredFile -Source $ffprobeExecutable -Destination $script:ToolPaths.Ffprobe
+    if ($script:FfmpegHardwareBackends.Count -gt 0) {
+        Install-ConfiguredFile -Source (Join-Path $buildRoot "bluraysub-gpu-capabilities.exe") -Destination $script:ToolPaths.GpuCapabilities
+    }
 }
 
 function Get-FlacRelease {

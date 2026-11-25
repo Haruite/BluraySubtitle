@@ -20,7 +20,7 @@ case "$tool" in
         ;;
 esac
 case "$tool" in
-    ffmpeg|ffprobe|mpv|vsedit|vspipe|python3) set_video_driver_paths ;;
+    ffmpeg|ffprobe|bluraysub-gpu-capabilities|mpv|vsedit|vspipe|python3) set_video_driver_paths ;;
 esac
 case "$tool" in
     mpv|ffmpeg|ffprobe)

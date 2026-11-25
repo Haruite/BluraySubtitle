@@ -87,7 +87,8 @@
 本节只记录已确认的例外和容易产生歧义的产品语义。普通实现改进不新增条目；算法和流程说明放在对应 wiki 或开发文档。
 
 - **ISO 合并字幕：** ISO 输入仅用于读取 BDMV 播放列表并合并字幕，不支持预览、Remux 或 Encode。
-- **Dolby Vision 增强层：** Dolby Vision Remux 或 x265 压制前识别 MEL／FEL，识别失败按 FEL 处理。Remux 仅在不丢弃图像残差的情况下转换为 P8.1，否则保留 P7。x265 可仅压制基础层而不利用 FEL 残差，并在完成弹窗中提示此限制。SVT-AV1 统一提示不会保留 Dolby Vision，不区分 MEL／FEL。这两类限制均不使 Encode 失败，也不要求事先确认。
+- **Dolby Vision 增强层。** 保留 Dolby Vision 的 Remux 或 Encode 前须识别 MEL／FEL，识别失败按 FEL 处理。Remux 仅在能保留图像残差时转换为 P8.1，否则保留 P7。Encode 可以使用基础层，舍弃的 FEL 残差须在完成报告中提示。
+- **压制时的 HDR 兼容性。** 所选输出或 VapourSynth 色彩无法保留 Dolby Vision、HDR10+ 或静态 HDR 时，按所选编码设置继续压制，在条目警告中列出省略项，并保留兼容的元数据。可选元数据处理失败时报告原因并保留有效的视频。
 - **主播放列表 Remux 选轨：** 视频、音频和字幕选择以“编辑轨道”为准。混流命令中手工填写的选轨参数由已捕获的轨道选择替换。
 - **压制视频时间轴：** CFR 与 VFR 均保留来源 MKV 的显示时间戳及视频起始偏移。支持保持帧对应关系的 VPy 处理及 README 的开头截取测试，内嵌字幕保持同步。通用抽帧／补帧、重排、剪辑、变速及转 CFR 不属于此契约。
 - **自动 getnative：** 实际源高度超过 1080 像素时，即使已勾选选项，Encode 也会报告并跳过自动 getnative。更高分辨率的分析须手动运行 `src/scripts/getnative_file.py` 并配置 VPy。

@@ -1453,3 +1453,16 @@ Linux 和 FreeBSD 在原生 Wayland 下共用程序自绘标题栏。标题栏�
 FreeBSD 缓存包含 libplacebo 和 RIFE 的 Git 源码、Cargo 索引和 Go 编译缓存。当周的运行环境缓存校验失败时，从组件缓存重新组装。包验收用随包的 CPU 滤镜渲染画面，并用生成的样本验证 7-Zip 和 tsMuxeR。
 
 Linux KDE 和 FreeBSD 14.5 的嵌套 Qt Wayland 合成器通过了主题与窗口按钮检查。浅色模式采用 FreeBSD Xfce 和 Linux KDE 提供的强调色。用同一份归档在 14.5 和 15.1 上验证了 VSEdit 预览、mpv 加载 uosc、Dolby Vision 和 HDR10+ 提取，以及 libplacebo 和 RIFE 的软件 Vulkan 出帧。
+
+## 按设备压制视频
+
+2026-11-24 至 2026-11-25 · 基于 `c315233`
+
+原盘和 Remux 来源可为每个正片或 SP 指定已启用的 CPU 或 GPU。同一设备按表格顺序处理，不同设备可用独立的 VPy 并行压制。GPU 压制默认关闭。
+能力查询工具先读取驱动能力，再用 FFmpeg 短片试压验证编码格式、位深和内置预设。设置可运行同一套检测并复制诊断报告。Windows Quick Sync 使用所选 D3D11 适配器并接收系统内存中的画面。
+Vulkan 按 UUID 选择适配器，将 8、10、12 位 4:2:0 FFV1 归入同一张显卡的编码选项。Windows、Linux 和 macOS 构建启用 `ffv1_vulkan`。VideoToolbox 增加 ProRes 422 和 4444。Windows ARM64 的 GPU 压制使用 NVIDIA 显卡。
+CPU 和 GPU 设置均提供可复制的参数预览及自定义预设编辑器，GPU 预设按设备、编码格式和位深保存。
+硬件 HEVC 保留兼容的静态 HDR，将 Dolby Vision 和 HDR10+ 后注入并校验。程序继续压制并按条目报告省略的元数据。最终 MKV 混流沿用来源时间戳。
+Windows 上的 RTX 5070 验证了 CPU 与 NVENC 同批压制、H.264／HEVC／AV1 的 8 位和 10 位组合，以及 10 位 NVENC HEVC 保留三种 HDR 元数据。
+测试的 Profile 7 素材经 x265 和 NVENC 压制后得到 Profile 8 输出，时间戳一致。Vulkan FFV1 在三种位深下均保留了解码像素和时间戳。软件生成的 ProRes 样本经 MKVToolNix 混流后保留时间戳。
+Windows ARM64 能力查询工具通过交叉编译，Qt 离屏检查验证了两种来源和预设持久化。原生 ARM64、Quick Sync、AMF 和 VideoToolbox 仍待实机验证。

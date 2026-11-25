@@ -14,8 +14,20 @@ This page summarizes the formats encountered in Blu-ray and BluraySubtitle. “F
 | MVC | AVC's stereoscopic extension: a base view plus a dependent view, sometimes addressed through extensions/subpaths |
 | HEVC / H.265 | Primary UHD-Blu-ray codec, commonly 10-bit 4:2:0 with Rec. 2020/HDR signaling |
 | AV1 | An Encode target through SVT-AV1, rather than a BDMV/UHD-BD source codec in this project |
+| [FFV1](#ffv1) | Lossless video for preservation and intermediate files |
+| [Apple ProRes](#apple-prores) | High-quality video for editing and post-production |
 
 Codec names identify the bitstream; x264, x265, and SVT-AV1 are encoder implementations. See [encoder selection](Video-Encoding-and-VapourSynth.md#choosing-h264-h265-or-av1) for output depth, compatibility, and Dolby Vision constraints.
+
+### FFV1
+
+FFV1 is a lossless intra-frame codec. Decoding reproduces the exact pixel samples sent to the encoder. This makes it useful for archiving video or saving a processed intermediate for later work. In BluraySubtitle, the samples being preserved are the frames supplied after filtering and pixel-format conversion. [FFV1 specification (RFC 9043)](https://www.rfc-editor.org/rfc/rfc9043.html)
+
+### Apple ProRes
+
+Apple ProRes is a family of lossy intra-frame codecs designed for editing and post-production. Each frame can be decoded independently, which makes seeking and scrubbing practical. The 10-bit ProRes 422 family uses 4:2:2 chroma and offers Proxy, LT, 422, and HQ in order of increasing target data rate. ProRes 4444 and 4444 XQ use full-resolution 4:4:4 chroma, support up to 12 bits per image component, and can carry an alpha channel. XQ uses a higher target data rate than 4444. [Apple ProRes white paper](https://www.apple.com/final-cut-pro/docs/Apple_ProRes.pdf)
+
+BluraySubtitle lists the available FFV1 and ProRes modes by [video encoding device](Video-Encoding-and-VapourSynth.md#video-encoding-devices).
 
 ### Pixel format is separate from codec
 

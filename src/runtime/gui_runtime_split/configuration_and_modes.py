@@ -105,9 +105,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._retire_sp_table_scan()
             for table, labels in ((self.table2, ENCODE_REMUX_LABELS), (self.table3, ENCODE_REMUX_SP_LABELS)):
                 table.setColumnCount(len(labels))
-                self._set_table_headers(table, labels)
                 for column in range(table.columnCount()):
                     table.setColumnHidden(column, False)
+                self._set_table_headers(table, labels)
             self._update_language_combo_enabled_state()
             self.table2.setRowCount(0)
             self.table3.setRowCount(0)
@@ -124,9 +124,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             # ENCODE_REMUX has output/vpy earlier + mkv track buttons). If we only resize columns, old
             # QTableWidgetItem / cellWidget stay at the same (row,col) and appear under wrong headers.
             self.table2.setColumnCount(len(ENCODE_LABELS))
-            self._set_table_headers(self.table2, ENCODE_LABELS)
             for c in range(self.table2.columnCount()):
                 self.table2.setColumnHidden(c, False)
+            self._set_table_headers(self.table2, ENCODE_LABELS)
             self.table3.setColumnCount(len(ENCODE_SP_LABELS))
             self._set_table_headers(self.table3, ENCODE_SP_LABELS)
             self.table2.setRowCount(0)
@@ -1509,9 +1509,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.table2.clear()
                 self.table2.setRowCount(0)
                 self.table2.setColumnCount(len(ENCODE_LABELS))
-                self._set_table_headers(self.table2, ENCODE_LABELS)
                 for c in range(self.table2.columnCount()):
                     self.table2.setColumnHidden(c, False)
+                self._set_table_headers(self.table2, ENCODE_LABELS)
                 try:
                     self._apply_hidden_m2ts_file_detail_columns()
                 except Exception:
@@ -1590,10 +1590,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         self._apply_encode_codec_slot_visibility()
                     if hasattr(self, '_sub_pack_row') and self._sub_pack_row:
                         self._sub_pack_row.setVisible(False)
-                    if (
-                        getattr(self, 'encode_tool_combo', None) is not None
-                        and getattr(self, 'x265_params_label', None) is not None
-                    ):
+                    if getattr(self, 'encode_tool_combo', None) is not None:
                         use_x264 = any(
                             str(v or '') == 'h264(encoded)'
                             for mp in conv_cfg.values() for v in (mp or {}).values()

@@ -178,6 +178,7 @@ def stage(support: Path, uosc_bundle: Path) -> None:
     settings = runpy.run_path(settings_file)
     native = support / "linux"
     tools = {tool: Path(settings[key]) for tool, key in TOOL_SETTINGS.items()}
+    tools["bluraysub-gpu-capabilities"] = tools["ffmpeg"].with_name("bluraysub-gpu-capabilities")
     mkv = Path(os.environ["BLURAY_QT_TOOLS"])
     tools.update({name: mkv / name for name in ("mkvinfo", "mkvmerge", "mkvpropedit", "mkvextract")})
     tools["mpv"] = native_mpv_executable(Path(shutil.which("mpv") or "/usr/local/bin/mpv"))
@@ -299,6 +300,14 @@ def stage(support: Path, uosc_bundle: Path) -> None:
         copyright_file = Path("/usr/share/doc") / package / "copyright"
         shutil.copy2(copyright_file, support / "legal" / f"{package}-copyright")
         used_paths.add(copyright_file)
+    shutil.copy2(
+        "/usr/local/share/doc/bluraysubtitle-ffmpeg/hardware.txt",
+        support / "legal/ffmpeg-hardware.txt",
+    )
+    if MULTIARCH == "x86_64-linux-gnu":
+        vpl_copyright = Path("/usr/share/doc/libvpl-dev/copyright")
+        shutil.copy2(vpl_copyright, support / "legal/onevpl-copyright")
+        used_paths.add(vpl_copyright)
     # Strip the staged copies after comparing them for deduplication.
     for library in support.rglob("*.so*"):
         if (library.suffix == ".so" or ".so." in library.name) and not library.is_symlink() and library.is_file():

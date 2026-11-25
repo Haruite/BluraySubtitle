@@ -18,6 +18,28 @@ The setup scripts build unmodified upstream SVT-AV1. The Encode controls and set
 
 Quality depends on source texture/motion, encoder version, rate control, preset, filters, and playback conditions. Compare representative samples from the same source at the intended viewing distance; transcoding one test result into another codec adds generation loss and biases the comparison.
 
+## Video encoding devices
+
+**Enable GPU encoding** is off by default. Turn it on in **Settings → Advanced → Video encoding devices** to show GPU settings and the **Video encoding device** column for main and SP videos. Encode and Advanced settings group the codec, bit depth, and preset by device.
+
+Detection queries the device driver for available codecs and depths. FFmpeg then tests the reported modes and their presets, and FFprobe checks the encoded frames. **Detect GPUs** runs the same checks. **Copy report** includes the driver capabilities, attempted commands and verified modes. For a source installation, setup installs the capability query executable alongside FFmpeg.
+
+| Setup target | Hardware backends |
+| --- | --- |
+| Standard Windows x64 | NVIDIA NVENC, Intel Quick Sync, AMD AMF, and Vulkan |
+| Windows ARM64 | NVIDIA NVENC and Vulkan on NVIDIA GPUs with a native driver |
+| Linux x64 | NVIDIA NVENC via CUDA, Intel Quick Sync via VAAPI and oneVPL, AMD AMF via the AMD runtime, and Vulkan |
+| Linux ARM64 | NVIDIA NVENC and Vulkan where supported by the installed driver |
+| macOS Intel and Apple silicon | The system-selected VideoToolbox hardware encoder and Vulkan via MoltenVK |
+
+For a GPU to appear, the configured FFmpeg must include its hardware backend and the host needs a working vendor driver. The Linux AMF interface uses a driver-selected Vulkan adapter, so the app offers it when there is a single AMD render adapter. VideoToolbox exposes one system-selected device. A custom Windows x64 FFmpeg with Media Foundation can offer the system-selected 8-bit encoder when no vendor backend passes. [FFmpeg hardware device documentation](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options) · [NVIDIA native ARM64 NVENC requirements](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#basic-encoding-flow)
+
+Vulkan runs FFV1 encoding on the GPU's compute shaders. It requires a Vulkan 1.3 GPU driver and an FFmpeg build with `ffv1_vulkan`. BluraySubtitle offers verified 8-, 10-, and 12-bit 4:2:0 modes and muxes the lossless FFV1 version 4 video into the final MKV. A GPU that also provides a vendor encoder offers FFV1 in the same device settings. [FFV1 format and uses](Media-Formats-and-Dolby-Vision.md#ffv1) · [FFmpeg Vulkan compute codecs](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
+
+On macOS, VideoToolbox can offer 10-bit ProRes 422 and 12-bit ProRes 4444 profiles. BluraySubtitle offers the profiles that pass a short hardware encode and muxes the video into the final MKV. [ProRes profiles and uses](Media-Formats-and-Dolby-Vision.md#apple-prores) · [Apple VideoToolbox encoder capabilities](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
+
+Each device processes its assigned rows in table order, and different devices can run concurrently. SP tracks attached to a main output use that output's encoder. VapourSynth processing supplies frames for CPU and GPU encodes.
+
 ## The BluraySubtitle encode pipeline
 
 For Blu-ray input, the high-level path is:
@@ -36,7 +58,8 @@ vspipe --container y4m
         │
         ├── x264  → .h264
         ├── x265  → .hevc
-        └── SVT-AV1 → .ivf
+        ├── SVT-AV1 → .ivf
+        └── FFmpeg hardware encoder → .h264, .hevc, .ivf or temporary .mkv
         │
         ▼
 final MKV with selected audio, subtitles, chapters, attachments, and metadata
@@ -44,7 +67,7 @@ final MKV with selected audio, subtitles, chapters, attachments, and metadata
 
 The staging remux preserves source audio. Audio conversion and final audio cleanup happen only in the final mux after video encoding succeeds. This avoids performing a lossy or expensive audio operation before the video result exists.
 
-`vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoder's elementary-stream result is temporary; the user-facing result is the final MKV.
+`vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoded video is temporary and becomes a track in the final MKV.
 
 Set `VSPIPE_PATH` in **Settings → External tools** to the VSPipe executable for Encode and FrameCheck. A separate VapourSynth installation needs its own Python bindings and filter scripts such as `mvsfunc.py`. On Linux, `PLUGIN_PATH` supplies the directory of compatible plugins to the selected VSPipe. Set the encoder and VSEdit paths in their corresponding rows.
 
@@ -77,7 +100,9 @@ BluraySubtitle adds a second, project-level preset layer:
 | Very High Quality | More analysis and a lower CRF than High Quality |
 | Extreme | Very slow, large-quality-budget starting point |
 
-Each encoder has six read-only built-in presets. Advanced settings can add, rename, edit, and delete user-defined presets for the encoder currently selected there. Only user-defined presets are stored in `config.json`. The Encode page shows the built-in and user-defined presets for its current encoder. Selecting a preset fills the parameter field, while directly editing that field keeps the selected preset name unchanged. The visible parameter string at task launch is authoritative.
+Each CPU encoder has six built-in presets. In Advanced settings, **Parameter preview** shows the selected preset's parameters in a copyable line. Use **Custom encode presets** to copy a preset as a starting point, then rename it and edit its parameters. CPU presets belong to an encoder. GPU presets belong to a device, codec, and bit depth. Device defaults and user-defined presets are stored in `config.json`.
+
+In Encode, selecting a preset fills the **Encoder parameters** field. Direct edits keep the selected preset name, and Encode uses the visible parameters at launch.
 
 ## Built-in parameter presets
 
@@ -197,6 +222,10 @@ When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its vali
 Dolby Vision uses native x265 RPU input when the executable advertises it and the row already has VBV and mastering-display parameters. Otherwise, or when native verification fails, it uses `dovi_tool` injection without changing rate control.
 
 When both HDR10+ and Dolby Vision are present, x265 writes both in one encode if both native paths qualify. HEVC is checked for both metadata sets after the last injection and before final muxing.
+
+Hardware encoding preserves HDR10+ and Dolby Vision with 10-bit HEVC. It transfers compatible HDR10 mastering-display and light-level metadata to the Matroska track. After encoding, `dovi_tool` and `hdr10plus_tool` inject their respective metadata into temporary HEVC streams. The verified stream replaces the previous stream after checking that existing Dolby Vision metadata was preserved.
+
+Encode continues with the selected settings when the output cannot preserve all source HDR metadata. For example, 8-bit output omits automatic mastering-display and light-level metadata. The completion report identifies what was omitted. Metadata tool failures also produce a diagnostic report and keep the usable encoded video.
 
 If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source brightness statistics are retained without remeasurement after cropping.
 
