@@ -131,6 +131,7 @@ class EncodePreferences:
     use_getnative: bool = True
     auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
+    hdr_to_sdr: bool = False
     check_corrupted_frames: bool = False
     frame_check_luma_psnr_threshold_db: float = 30.0
     frame_check_chroma_psnr_threshold_db: float = 30.0
@@ -624,6 +625,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 "output_comparison_images",
                 True,
             ),
+            hdr_to_sdr=_boolean_value(encode, "hdr_to_sdr", False),
             check_corrupted_frames=_boolean_value(
                 encode,
                 "check_corrupted_frames",

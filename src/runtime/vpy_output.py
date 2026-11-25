@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from src.core.i18n import translate_text
 from src.core.video_format import OutputResolution
+from src.runtime.hdr_to_sdr import HdrToSdrSource, vpy_hdr_to_sdr
 from src.runtime.video_timeline import VPY_HARDSUB_CALL
 
 
@@ -38,11 +39,14 @@ def remove_vpy_output_format(script: str) -> str:
 
 def vpy_with_output_format(
         script: str, bit_depth: str, chroma_format: str, resolution: OutputResolution = OutputResolution(),
+        *, hdr_to_sdr: HdrToSdrSource | None = None,
 ) -> str:
     """Convert output 0 while preserving the processing graph and other outputs."""
     target = f'{chroma_format.upper()}P{bit_depth}'
     script = remove_vpy_output_format(script)
     resize = subtitle = ''
+    tone_map = vpy_hdr_to_sdr(hdr_to_sdr) if hdr_to_sdr is not None else ''
+    apply_tone_map = '    clip = _bluraysub_hdr_to_sdr(clip, vs)\n' if tone_map else ''
     if resolution.enabled:
         horizontal_alignment = 1 if chroma_format == 'yuv444' else 2
         vertical_alignment = 2 if chroma_format == 'yuv420' else 1
@@ -73,6 +77,7 @@ def vpy_with_output_format(
         clip = clip.resize.Spline36(width, height, format=target_format, dither_type='error_diffusion')
         clip = clip.std.SetFrameProps(_SARNum=1, _SARDen=1)
 '''
+    if resolution.enabled or (hdr_to_sdr is not None and hdr_to_sdr.is_hdr):
         if match := _MANAGED_SUBTITLE.search(script):
             script = script[:match.start()] + _DEFERRED_SUBTITLE + script[match.start():]
             subtitle = f'''
@@ -83,12 +88,12 @@ def vpy_with_output_format(
     return script.rstrip('\r\n') + f'''
 
 {_FORMAT_BEGIN}
-def _bluraysub_apply_output_format():
+{tone_map}def _bluraysub_apply_output_format():
     import vapoursynth as vs
 
     output = vs.get_output(0)
     clip = getattr(output, 'clip', output)
-{resize}    # Keep RGB debug output in its original color format.
+{apply_tone_map}{resize}    # Keep RGB debug output in its original color format.
     if clip.format is not None and clip.format.color_family == vs.YUV and clip.format.id != vs.{target}:
         clip = clip.resize.Spline36(format=vs.{target}, dither_type='error_diffusion')
 {subtitle}    if clip is not getattr(output, 'clip', output):

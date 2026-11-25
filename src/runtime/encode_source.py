@@ -16,6 +16,7 @@ from typing import Sequence
 from src.core.i18n import translate_text
 from src.core.tool_paths import require_tool_path, tool_path
 from src.exports.utils import run_command, run_vspipe
+from src.runtime.hdr_to_sdr import HdrToSdrSource
 from src.runtime.vpy_output import VpyOutputGeometry
 
 
@@ -343,29 +344,24 @@ def _normalized_metadata_text(value: object) -> str | None:
     return normalized
 
 
+def _source_side_data(source: ActualEncodeSource) -> tuple[dict[str, object], ...]:
+    items = source.stream.get('side_data_list')
+    return tuple(item for item in items if isinstance(item, dict)) if isinstance(items, list) else ()
+
+
 def parse_source_color_metadata(source: ActualEncodeSource) -> SourceColorMetadata:
     """Normalize color fields and static HDR side data from an actual source."""
     mastering_display_x26x = None
     mastering_display_svt = None
     content_light_level = None
-    side_data_list = source.stream.get('side_data_list')
-    if isinstance(side_data_list, list):
-        for side_data in side_data_list:
-            if not isinstance(side_data, dict):
-                continue
-            side_data_type = str(side_data.get('side_data_type') or '').lower()
-            if (
-                    mastering_display_x26x is None
-                    and 'mastering display metadata' in side_data_type
-            ):
-                mastering_values = _mastering_display_values(side_data)
-                if mastering_values is not None:
-                    mastering_display_x26x, mastering_display_svt = mastering_values
-            if (
-                    content_light_level is None
-                    and 'content light level metadata' in side_data_type
-            ):
-                content_light_level = _content_light_level_value(side_data)
+    for side_data in _source_side_data(source):
+        side_data_type = str(side_data.get('side_data_type') or '').lower()
+        if mastering_display_x26x is None and 'mastering display metadata' in side_data_type:
+            mastering_values = _mastering_display_values(side_data)
+            if mastering_values is not None:
+                mastering_display_x26x, mastering_display_svt = mastering_values
+        if content_light_level is None and 'content light level metadata' in side_data_type:
+            content_light_level = _content_light_level_value(side_data)
 
     return SourceColorMetadata(
         color_range=_normalized_metadata_text(source.stream.get('color_range')),
@@ -549,7 +545,7 @@ def probe_video_geometry(
     return width, height, Fraction(width, height) * (sar if sar > 0 else 1)
 
 
-def probe_actual_encode_source(source_path: str) -> ActualEncodeSource:
+def probe_actual_encode_source(source_path: str, *, cancel_event: Event | None = None) -> ActualEncodeSource:
     """Probe the first video stream from the resolved per-row Encode source."""
     normalized_path = os.path.abspath(os.path.normpath(str(source_path or '').strip()))
     if not os.path.isfile(normalized_path):
@@ -580,6 +576,7 @@ def probe_actual_encode_source(source_path: str) -> ActualEncodeSource:
         encoding='utf-8',
         errors='replace',
         timeout=120,
+        cancel_event=cancel_event,
     )
     if result.returncode != 0:
         error = str(result.stderr or '').strip()
@@ -795,16 +792,68 @@ def probe_vapoursynth_frame_count(
 
 def source_has_hdr10plus(source: ActualEncodeSource) -> bool:
     """Return whether FFprobe exposed ST 2094-40 metadata on the source."""
-    side_data = source.stream.get('side_data_list')
-    if not isinstance(side_data, list):
-        return False
-    for item in side_data:
-        if not isinstance(item, dict):
-            continue
+    for item in _source_side_data(source):
         name = str(item.get('side_data_type') or '').lower()
         if 'hdr10+' in name or 'smpte2094-40' in name.replace(' ', ''):
             return True
     return False
+
+
+def hdr_to_sdr_source(source: ActualEncodeSource, *, input_mode: str) -> HdrToSdrSource:
+    """Use the stream's compatible base signal, or require a Dolby Vision reshape."""
+    metadata = parse_source_color_metadata(source)
+    transfer = next((code for code, name in _VS_COLOR_TRANSFERS.items() if name == metadata.color_transfer), 2)
+    primaries = next((code for code, name in _VS_COLOR_PRIMARIES.items() if name == metadata.color_primaries), 9)
+    matrix = next((code for code, name in _VS_COLOR_MATRICES.items() if name == metadata.color_matrix), 9)
+    dolby = next((item for item in _source_side_data(source) if 'dv_profile' in item), {})
+    profile = dolby.get('dv_profile')
+    compatibility = dolby.get('dv_bl_signal_compatibility_id')
+    # UHD Blu-ray supplies a Profile 7 base layer. Proprietary base signals can occur in imported MKVs.
+    needs_rpu = input_mode == 'remux' and (
+        profile == 5 or (bool(profile) and compatibility == 0 and profile != 7)
+        or metadata.color_matrix == 'ipt-c2'
+    )
+    if compatibility == 4:
+        transfer = 18
+    elif transfer == 2:
+        if compatibility == 2:
+            transfer = 1
+        elif profile == 7 or compatibility in (1, 6) or source_has_hdr10plus(source) or metadata.mastering_display_x26x:
+            transfer = 16
+
+    peak = int(metadata.content_light_level.split(',')[0]) if metadata.content_light_level else 0
+    if not 100 <= peak <= 10000:
+        # The x265 mastering display representation stores luminance in 0.0001 nit units.
+        match = re.search(r'L\((\d+),', metadata.mastering_display_x26x or '')
+        peak = int(match[1]) / 10000 if match else 0
+    return HdrToSdrSource(
+        transfer, primaries, matrix, float(peak) if 100 <= peak <= 10000 else 1000.0,
+        needs_rpu, metadata.color_range == 'pc',
+    )
+
+
+def verify_sdr_encode(source: ActualEncodeSource, *, expect_bt709: bool) -> None:
+    """Reject conflicting bitstream tags before publishing an SDR file."""
+    metadata = parse_source_color_metadata(source)
+    if (
+            metadata.color_transfer in ('smpte2084', 'arib-std-b67')
+            or metadata.mastering_display_x26x or metadata.content_light_level
+            or source_has_hdr10plus(source)
+            or any('dv_profile' in item or 'dolby vision' in str(item.get('side_data_type', '')).lower()
+                   for item in _source_side_data(source))
+    ):
+        raise RuntimeError(translate_text('The encoder wrote HDR signaling for the requested SDR output: {path}').format(
+            path=source.path,
+        ))
+    if expect_bt709 and (
+            any(value not in (None, 'bt709') for value in (
+                metadata.color_primaries, metadata.color_transfer, metadata.color_matrix,
+            ))
+            or metadata.color_range not in (None, 'tv', 'limited')
+    ):
+        raise RuntimeError(translate_text('The encoded video color tags do not match the BT.709 SDR output: {path}').format(
+            path=source.path,
+        ))
 
 
 def probe_svt_av1_bit_depths(executable: str) -> frozenset[str]:

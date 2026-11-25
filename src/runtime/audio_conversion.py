@@ -1678,6 +1678,7 @@ def mux_with_audio_conversion(
         track_language_overrides: tuple[tuple[str, str], ...] = (),
         encoded_video_file: str = '',
         encoded_video_hdr: SourceColorMetadata | None = None,
+        encoded_video_bt709: bool = False,
         video_timestamps_file: str = '',
         subtitle_file: str = '',
         subtitle_language: str = '',
@@ -2200,6 +2201,12 @@ def mux_with_audio_conversion(
                 # These are absolute source timestamps, including the video delay.
                 input_arguments.extend(['--timestamps', f'0:{video_timestamps_file}'])
             input_arguments.extend(matroska_static_hdr_arguments(encoded_video_hdr))
+            if encoded_video_bt709:
+                # Some hardware and custom encoders omit the VPy color properties in the bitstream.
+                input_arguments.extend((
+                    '--color-matrix-coefficients', '0:1', '--color-transfer-characteristics', '0:1',
+                    '--color-primaries', '0:1', '--color-range', '0:1',
+                ))
             input_arguments.append(encoded_path)
 
         external_subtitle_input = -1

@@ -238,6 +238,12 @@ Encode 的五项控制在启动时替换默认 VPy 的 `denoise_strength`、`deh
 
 裁剪按偶数对齐，各行之间替换或移除已有受管理块。自定义 VPy 必须具有安全的 `src8`／`res` 插入边界；边界不明确，或非受管理的 `Crop`／`CropAbs` 与非零自动裁剪同时存在时，该行会失败，以避免位置不明或重复裁剪。
 
+### HDR 转 SDR
+
+在**原盘压制**的**输出对比图**下方勾选**HDR 转 SDR**，即可对整个批次的 CPU 和 GPU 压制生效。默认关闭，可在**设置 > 高级 > 默认压制设置**调整默认值。
+
+预览与压制都将 HDR 画面映射到 BT.709。HDR10 和 HDR10+ 使用 PQ 画面，HLG 使用其原有的 HLG 传递函数。UHD Blu-ray 原盘的 Dolby Vision 使用 Profile 7 的 HDR10 兼容基础层。Remux 来源优先使用兼容基础层，Profile 5 使用解码器提供的 RPU 和支持 Vulkan 的 vs-placebo 重建色彩。成品使用 SDR 色彩标记，主动省略的源 HDR 元数据和 FEL 残差属于预期的转换结果。
+
 ### 自动 HDR 元数据处理
 
 x265 10-bit 对 Dolby Vision 输入准备基础层和 profile 8.1 RPU 供编码使用；FEL 图像残差无法利用。Profile 8 要求 HEVC Main10 基础层，见 [Dolby 规范第 3.1 节的配置表](https://professional.dolby.com/siteassets/content-creation/dolby-vision-for-content-creators/dolbyvisioninmpegdashspecification_v2_0_public_20190107.pdf)。MEL／FEL 的含义和转换条件见 [Dolby Vision 分层](Media-Formats-and-Dolby-Vision.zh-Hans.md#dolby-vision-基础)，编码器与位深选择见[本页编码器对照](#选择-h264h265-还是-av1)。

@@ -1771,6 +1771,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 cpu_command=cpu_command,
                 chroma_format=choice.chroma_format,
                 output_resolution=row.output_resolution or request.settings.output_resolution,
+                hdr_to_sdr=request.settings.hdr_to_sdr,
+                input_mode=request.input_mode,
                 selected_audio_tracks=(
                     row.audio_tracks if request.input_mode == 'remux' else None
                 ),
@@ -2120,7 +2122,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         """Run one complete Encode request without consulting GUI state."""
         self.checked = False
         self.movie_mode = request.movie_mode
-        self.mux_dolby_vision = request.mux_dolby_vision
+        mux_dolby_vision = request.mux_dolby_vision and not request.settings.hdr_to_sdr
+        self.mux_dolby_vision = mux_dolby_vision
         self.allow_partial_missing_non_video_tracks = bool(
             request.allow_partial_missing_non_video_tracks
         )
@@ -2163,7 +2166,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             episode_output_names=episode_output_names,
             episode_subtitle_languages=episode_subtitle_languages,
             movie_mode=request.movie_mode,
-            mux_dolby_vision=request.mux_dolby_vision,
+            mux_dolby_vision=mux_dolby_vision,
             convert_lossless_audio_to_flac=False,
             allow_partial_missing_non_video_tracks=(
                 request.allow_partial_missing_non_video_tracks

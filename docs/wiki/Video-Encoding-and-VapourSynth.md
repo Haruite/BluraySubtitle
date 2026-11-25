@@ -240,6 +240,12 @@ Automatic analysis is necessarily heuristic: dark scenes, credits, overlays, and
 
 The crop is even-aligned. Existing managed blocks are replaced or removed between rows. A custom VPy must expose a safe `src8`/`res` insertion boundary; an unknown boundary or a non-managed `Crop`/`CropAbs` call combined with nonzero automatic cropping fails the row to prevent ambiguous or double cropping.
 
+### HDR to SDR
+
+In **Blu-ray Encode**, enable **Convert HDR to SDR** below **Output comparison images**. The switch applies to the whole batch, including CPU and GPU outputs. It is off by default. Change the default under **Settings > Advanced > Default encode settings**.
+
+Preview and encoding tone-map HDR to BT.709. HDR10 and HDR10+ use the PQ picture, and HLG uses its HLG transfer. UHD Blu-ray Dolby Vision uses the HDR10-compatible Profile 7 base layer. For Remux input, a compatible base layer is used when available, and Profile 5 color reconstruction uses the decoder's RPU and Vulkan-enabled vs-placebo. The SDR output uses SDR color tags, and the batch treats the intentional omission of source HDR metadata and FEL residuals as part of the conversion.
+
 ### Automatic HDR metadata handling
 
 For Dolby Vision input, x265 10-bit encodes the base layer with profile 8.1 RPU; FEL image residuals cannot be used. Profile 8 requires an HEVC Main10 base layer, as specified in [Dolby's profile table, section 3.1](https://professional.dolby.com/siteassets/content-creation/dolby-vision-for-content-creators/dolbyvisioninmpegdashspecification_v2_0_public_20190107.pdf). See [Dolby Vision layers](Media-Formats-and-Dolby-Vision.md#dolby-vision-fundamentals) for MEL/FEL and conversion conditions, and the [encoder comparison](#choosing-h264-h265-or-av1) for encoder and bit-depth choices.

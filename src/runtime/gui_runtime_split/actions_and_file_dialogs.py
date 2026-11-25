@@ -203,6 +203,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         if show_full_codec:
             self._refresh_cpu_encode_command()
         self.encode_resolution_row.setVisible(show_full_codec)
+        self.hdr_to_sdr_checkbox.setVisible(show_full_codec)
         hint = getattr(self, 'diy_bd_encode_hint_label', None)
         self.encode_audio_row.setVisible(show_full_codec)
         if hint is not None:
@@ -894,6 +895,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 bit_depth=bit_depth,
                 chroma_format=self.encode_device_controls.cpu_box.chroma.currentData() or 'yuv420',
                 output_resolution=self.encode_resolution_row.selected_resolution(),
+                hdr_to_sdr=self.hdr_to_sdr_checkbox.isChecked(),
                 use_getnative=bool(
                     getattr(self, 'use_getnative_checkbox', None)
                     and self.use_getnative_checkbox.isChecked()
@@ -1732,7 +1734,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.use_getnative_checkbox.setChecked(True)
         primary_options.addWidget(self.use_getnative_checkbox)
         self.auto_crop_black_borders_checkbox = QCheckBox(
-            self.t('Auto-crop black borders (verify result)'),
+            self.t('Auto-crop black borders'),
             tools_row,
         )
         self.auto_crop_black_borders_checkbox.setChecked(False)
@@ -1746,6 +1748,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         )
         self.output_comparison_checkbox.setChecked(True)
         primary_options.addWidget(self.output_comparison_checkbox)
+        self.hdr_to_sdr_checkbox = QCheckBox(self.t('Convert HDR to SDR'), tools_row)
+        primary_options.addWidget(self.hdr_to_sdr_checkbox)
         self.frame_check_checkbox = QCheckBox(
             self.t('Check corrupted frames'),
             tools_row,

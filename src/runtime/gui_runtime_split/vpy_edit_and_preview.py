@@ -18,8 +18,10 @@ from src.core.tool_paths import bundle_directory, is_bundled_tool, require_tool_
 from src.core.video_format import OutputResolution
 from src.exports.utils import print_exc_terminal, system_tool_environment
 from src.runtime import TaskCancelled
+from src.runtime.encode_source import hdr_to_sdr_source, probe_actual_encode_source
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
+from src.runtime.hdr_to_sdr import HdrToSdrSource
 from src.runtime.video_crop import VideoCropPlan, detect_black_borders, write_vapoursynth_crop
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
@@ -29,13 +31,19 @@ from src.runtime.vpy_output import remove_vpy_output_format, vpy_with_output_for
 from .gui_base import BluraySubtitleGuiBase
 
 
-class _PreviewCropThread(QThread):
-    def __init__(self, source: str, parent: QWidget) -> None:
+class _PreviewSourceThread(QThread):
+    def __init__(
+            self, source: str, parent: QWidget, *, input_mode: str, analyze_crop: bool, hdr_to_sdr: bool,
+    ) -> None:
         super().__init__(parent)
         self.source = source
         self.context = copy_context()
         self.cancel = Event()
-        self.plan: VideoCropPlan | None = None
+        self.input_mode = input_mode
+        self.analyze_crop = analyze_crop
+        self.hdr_to_sdr = hdr_to_sdr
+        self.crop_plan: VideoCropPlan | None = None
+        self.hdr_source: HdrToSdrSource | None = None
         self.error: Exception | None = None
 
     def requestInterruption(self) -> None:
@@ -44,7 +52,11 @@ class _PreviewCropThread(QThread):
 
     def run(self) -> None:
         try:
-            self.plan = self.context.run(detect_black_borders, self.source, cancel_event=self.cancel)
+            if self.hdr_to_sdr:
+                source = self.context.run(probe_actual_encode_source, self.source, cancel_event=self.cancel)
+                self.hdr_source = hdr_to_sdr_source(source, input_mode=self.input_mode)
+            if self.analyze_crop:
+                self.crop_plan = self.context.run(detect_black_borders, self.source, cancel_event=self.cancel)
         except TaskCancelled:
             pass
         except Exception as error:
@@ -914,6 +926,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
     def _update_vpy_paths_in_file(
             self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str,
             resolution: OutputResolution = OutputResolution(),
+            hdr_to_sdr: HdrToSdrSource | None = None,
     ) -> bool:
         """Update a=/sub_file=/TextSub toggle in target vpy file for preview context."""
         vpy_path = os.path.normpath(str(vpy_path or '').strip())
@@ -927,7 +940,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         def norm(s: str) -> str:
             return s.rstrip('\r\n')
 
-        bits = int(bit_depth)
+        bits = max(int(bit_depth), 10) if hdr_to_sdr is not None and hdr_to_sdr.is_hdr else int(bit_depth)
         processing_values = self._current_vpy_processing_values()
         changed = False
         for idx, line in enumerate(lines):
@@ -980,7 +993,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     changed = True
                 continue
 
-        output = vpy_with_output_format(''.join(lines), bit_depth, chroma_format, resolution)
+        output = vpy_with_output_format(''.join(lines), bit_depth, chroma_format, resolution, hdr_to_sdr=hdr_to_sdr)
         if changed or output != original:
             with open(vpy_path, 'w', encoding='utf-8') as fp:
                 fp.write(output)
@@ -990,13 +1003,14 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
     def _create_temp_preview_vpy_from_default(
             self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str,
             resolution: OutputResolution = OutputResolution(),
+            hdr_to_sdr: HdrToSdrSource | None = None,
     ) -> str:
         self.ensure_default_vpy_file()
         default_vpy = self.get_default_vpy_path()
         if not os.path.exists(default_vpy):
             return ''
         try:
-            bits = int(bit_depth)
+            bits = max(int(bit_depth), 10) if hdr_to_sdr is not None and hdr_to_sdr.is_hdr else int(bit_depth)
             processing_values = self._current_vpy_processing_values()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 lines = remove_vpy_output_format(fp.read()).splitlines(keepends=True)
@@ -1036,7 +1050,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
             os.close(fd)
             with open(temp_vpy, 'w', encoding='utf-8') as fp:
-                fp.write(vpy_with_output_format(''.join(out), bit_depth, chroma_format, resolution))
+                fp.write(vpy_with_output_format(''.join(out), bit_depth, chroma_format, resolution, hdr_to_sdr=hdr_to_sdr))
             return temp_vpy
         except Exception:
             print_exc_terminal()
@@ -1119,73 +1133,40 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             print_exc_terminal()
 
     def _launch_encode_preview(
-            self, preview_path: str, video_path: str, *, temporary: bool,
-            merge_default: bool, analyze_crop: bool,
+            self, preview_path: str, *, temporary: bool, merge_default: bool, cropped: bool,
     ) -> None:
         def discard():
             if temporary:
                 with suppress(OSError):
                     os.remove(preview_path)
 
-        def launch():
-            process = self.open_vpy_in_vsedit(preview_path)
-            if process is None:
-                discard()
-                return
-            if not temporary:
-                return
-            finished = False
-
-            def finish(*_):
-                nonlocal finished
-                if finished:
-                    return
-                finished = True
-                try:
-                    if merge_default and os.path.isfile(preview_path):
-                        if analyze_crop:
-                            write_vapoursynth_crop(preview_path, None)
-                        self._merge_temp_edit_back_to_default_vpy(preview_path)
-                        self._normalize_default_vpy_runtime_lines()
-                except Exception:
-                    print_exc_terminal()
-                finally:
-                    discard()
-                    process.deleteLater()
-
-            process.finished.connect(finish)
-            process.errorOccurred.connect(finish)
-
-        if not analyze_crop:
-            launch()
+        process = self.open_vpy_in_vsedit(preview_path)
+        if process is None:
+            discard()
             return
+        if not temporary:
+            return
+        finished = False
 
-        dialog = ScanProgressDialog(self, self.t('Analyzing black borders: {name}').format(
-            name=os.path.basename(video_path),
-        ), self.t('Cancel'))
-        self._apply_window_opacity(dialog)
-        worker = _PreviewCropThread(video_path, self)
-        dialog.cancel_requested.connect(worker.requestInterruption)
-
-        def crop_ready():
-            dialog.finish()
-            worker.deleteLater()
-            if worker.cancel.is_set() or self._close_pending:
-                discard()
+        def finish(*_):
+            nonlocal finished
+            if finished:
                 return
+            finished = True
             try:
-                if worker.error is not None:
-                    raise worker.error
-                write_vapoursynth_crop(preview_path, worker.plan)
-                launch()
-            except Exception as error:
+                if merge_default and os.path.isfile(preview_path):
+                    if cropped:
+                        write_vapoursynth_crop(preview_path, None)
+                    self._merge_temp_edit_back_to_default_vpy(preview_path)
+                    self._normalize_default_vpy_runtime_lines()
+            except Exception:
+                print_exc_terminal()
+            finally:
                 discard()
-                AnimatedMessageBox.warning(
-                    self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=error),
-                )
+                process.deleteLater()
 
-        worker.finished.connect(crop_ready)
-        worker.start()
+        process.finished.connect(finish)
+        process.errorOccurred.connect(finish)
 
     def _preview_script_for_row(
             self, vpy_path: str, video_path: str, subtitle_path: str, *, table: QTableWidget, row: int,
@@ -1213,41 +1194,79 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         default_vpy = self.get_default_vpy_path()
         if not vpy_path:
             vpy_path = default_vpy
-        preview_path = vpy_path
-        temporary = False
+        hdr_to_sdr = self.hdr_to_sdr_checkbox.isChecked()
         try:
             resolution = self._encode_row_resolution(table, row) or self.encode_resolution_row.selected_resolution()
-            analyze_crop = resolution.enabled and self.auto_crop_black_borders_checkbox.isChecked()
-            is_default = os.path.normcase(os.path.abspath(vpy_path)) == os.path.normcase(os.path.abspath(default_vpy))
-            if is_default:
-                preview_path = self._create_temp_preview_vpy_from_default(
-                    video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
-                    resolution=resolution,
-                )
-                if not preview_path:
-                    AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
-                    return
-                temporary = True
-            else:
-                if analyze_crop:
-                    original = Path(vpy_path).resolve()
-                    script = original.read_bytes()
-                    descriptor, preview_path = tempfile.mkstemp(prefix='.preview-', suffix='.vpy', dir=original.parent)
+        except ValueError as error:
+            AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=error))
+            return
+        analyze_crop = (resolution.enabled or hdr_to_sdr) and self.auto_crop_black_borders_checkbox.isChecked()
+        is_default = os.path.normcase(os.path.abspath(vpy_path)) == os.path.normcase(os.path.abspath(default_vpy))
+
+        def preview(crop_plan: VideoCropPlan | None = None, hdr_source: HdrToSdrSource | None = None) -> None:
+            preview_path = vpy_path
+            temporary = False
+            try:
+                if is_default:
+                    preview_path = self._create_temp_preview_vpy_from_default(
+                        video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                        resolution=resolution, hdr_to_sdr=hdr_source,
+                    )
+                    if not preview_path:
+                        AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
+                        return
                     temporary = True
-                    with os.fdopen(descriptor, 'wb') as snapshot:
-                        snapshot.write(script)
-                self._update_vpy_paths_in_file(
-                    preview_path, video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
-                    resolution=resolution,
+                else:
+                    if analyze_crop or hdr_to_sdr:
+                        original = Path(vpy_path).resolve()
+                        script = original.read_bytes()
+                        descriptor, preview_path = tempfile.mkstemp(prefix='.preview-', suffix='.vpy', dir=original.parent)
+                        temporary = True
+                        with os.fdopen(descriptor, 'wb') as snapshot:
+                            snapshot.write(script)
+                    self._update_vpy_paths_in_file(
+                        preview_path, video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                        resolution=resolution, hdr_to_sdr=hdr_source,
+                    )
+                if analyze_crop:
+                    write_vapoursynth_crop(preview_path, crop_plan)
+                self._launch_encode_preview(
+                    preview_path, temporary=temporary, merge_default=is_default, cropped=analyze_crop,
                 )
-            self._launch_encode_preview(
-                preview_path, video_path, temporary=temporary, merge_default=is_default, analyze_crop=analyze_crop,
-            )
-        except Exception as e:
-            if temporary:
-                with suppress(OSError):
-                    os.remove(preview_path)
-            AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=e))
+            except Exception as error:
+                if temporary:
+                    with suppress(OSError):
+                        os.remove(preview_path)
+                AnimatedMessageBox.warning(
+                    self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=error),
+                )
+
+        if not (analyze_crop or hdr_to_sdr):
+            preview()
+            return
+
+        message = 'Analyzing black borders: {name}' if analyze_crop else 'Analyzing video source metadata: {name}'
+        dialog = ScanProgressDialog(self, self.t(message).format(name=os.path.basename(video_path)), self.t('Cancel'))
+        self._apply_window_opacity(dialog)
+        worker = _PreviewSourceThread(
+            video_path, self, input_mode=self._encode_input_mode, analyze_crop=analyze_crop, hdr_to_sdr=hdr_to_sdr,
+        )
+        dialog.cancel_requested.connect(worker.requestInterruption)
+
+        def analysis_ready():
+            dialog.finish()
+            worker.deleteLater()
+            if worker.cancel.is_set() or self._close_pending:
+                return
+            if worker.error is not None:
+                AnimatedMessageBox.warning(
+                    self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=worker.error),
+                )
+                return
+            preview(worker.crop_plan, worker.hdr_source)
+
+        worker.finished.connect(analysis_ready)
+        worker.start()
 
     def _encode_row_video_path(self, table: QTableWidget, row: int, *, choose_clip: bool = False) -> str:
         labels = table.property('columnKeys') or ()

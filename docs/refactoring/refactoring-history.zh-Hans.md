@@ -1489,3 +1489,10 @@ Windows 上验证了动态下拉框、x264 和 x265 的 4:2:2 和 4:4:4，以及
 
 压制请求捕获批次分辨率和逐条覆盖。预览与压制共用 VPy 尺寸计算，受管理的内嵌字幕在缩放后渲染。编码结果按计划尺寸校验。Dolby Vision L5 偏移随裁边和缩放调整，HDR10+ 按处理窗口校验。
 Windows 上验证了原盘和 Remux 来源、CPU 与 GPU 混合压制及 VFR 时间戳，并验证了缩放后向 NVENC 输出注入 HDR10+ 和 Dolby Vision。
+
+## 批次 HDR 转 SDR
+
+2026-11-25 · 基于 `948e8cc`
+
+默认关闭的压制选项让预览和压制共用 BT.709 色调映射。UHD Blu-ray 的 Dolby Vision 使用 Profile 7 基础层。Remux 来源的 Profile 5 使用解码器的 RPU 重建色彩。SDR 流程在混流前校验色彩标记。
+Windows 使用 x264、x265 和 NVENC 验证了 HDR10、HDR10+、HLG 和 Dolby Vision Profile 5、7、8.1、8.4，覆盖 FEL RPU 和 VFR 时间戳。默认 HDR 流程使用同时携带 Dolby Vision 和 HDR10+ 的来源验证。

@@ -13,15 +13,39 @@ from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.encode_source import (
     ActualEncodeSource,
     extract_hdr10plus_metadata,
+    hdr_to_sdr_source,
     inject_hdr10plus_metadata,
     probe_vapoursynth_frame_count,
     probe_vapoursynth_output_metadata,
     source_has_hdr10plus,
     verify_hdr10plus_metadata,
+    verify_sdr_encode,
 )
 
 
 class EncodeSourceProbeTests(unittest.TestCase):
+    def test_sdr_conversion_selects_the_dolby_vision_base_signal(self) -> None:
+        cases = ((7, 6, 16, False), (8, 1, 16, False), (8, 4, 18, False), (8, 2, 1, False), (5, 0, 2, True))
+        for input_mode in ('bdmv', 'remux'):
+            for profile, compatibility, transfer, reshape in cases:
+                with self.subTest(input_mode=input_mode, profile=profile, compatibility=compatibility):
+                    source = ActualEncodeSource('source.mkv', 0, 'hevc', {'side_data_list': [{
+                        'side_data_type': 'DOVI configuration record',
+                        'dv_profile': profile,
+                        'dv_bl_signal_compatibility_id': compatibility,
+                    }]})
+                    plan = hdr_to_sdr_source(source, input_mode=input_mode)
+                    self.assertEqual(plan.transfer, transfer)
+                    self.assertEqual(plan.needs_dolby_vision_rpu, reshape and input_mode == 'remux')
+
+    def test_sdr_output_rejects_hdr_metadata_even_with_sdr_color_tags(self) -> None:
+        source = ActualEncodeSource('encoded.hevc', 0, 'hevc', {
+            'color_transfer': 'bt709',
+            'side_data_list': [{'side_data_type': 'HDR Dynamic Metadata SMPTE2094-40 (HDR10+)'}],
+        })
+        with self.assertRaisesRegex(RuntimeError, 'wrote HDR signaling'):
+            verify_sdr_encode(source, expect_bt709=True)
+
     def test_vapoursynth_output_properties_override_source_color_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

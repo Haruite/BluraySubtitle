@@ -35,11 +35,13 @@ from src.runtime.dolby_vision import (
 )
 from src.runtime.encode_command import CpuEncodeCommand, default_cpu_encode_command, format_encoder_command
 from src.runtime.encode_source import (
+    ActualEncodeSource,
     SourceColorMetadata,
     VapourSynthOutputMetadataMismatch,
     arguments_contain_option,
     build_automatic_encoder_metadata_arguments,
     extract_hdr10plus_metadata,
+    hdr_to_sdr_source,
     inject_hdr10plus_metadata,
     parse_source_color_metadata,
     probe_actual_encode_source,
@@ -51,6 +53,7 @@ from src.runtime.encode_source import (
     verify_encoded_dimensions,
     verify_final_video_metadata,
     verify_hdr10plus_metadata,
+    verify_sdr_encode,
     write_hdr_metadata_error_report,
 )
 from src.runtime.encode_results import EncodeTaskFailure
@@ -220,6 +223,8 @@ def _plan_automatic_encoder_metadata(
         chroma_format: str = 'yuv420',
         verify_resolution: bool = False,
         crop_plan: VideoCropPlan | None = None,
+        source_probe: ActualEncodeSource | None = None,
+        hdr_to_sdr: bool = False,
 ) -> tuple[
     tuple[str, ...],
     bool,
@@ -243,11 +248,11 @@ def _plan_automatic_encoder_metadata(
     hdr10plus_metadata_prepared = False
     geometry = None
     try:
-        actual_source = probe_actual_encode_source(source_path)
+        actual_source = source_probe if source_probe is not None else probe_actual_encode_source(source_path)
     except TaskCancelled:
         raise
     except Exception as error:
-        if verify_resolution:
+        if verify_resolution or hdr_to_sdr:
             raise
         _record_nonblocking_hdr_automation_failure(
             service,
@@ -275,7 +280,7 @@ def _plan_automatic_encoder_metadata(
         or input_metadata.mastering_display_x26x
         or input_metadata.content_light_level
     )
-    hdr10plus_present = source_has_hdr10plus(actual_source)
+    hdr10plus_present = not hdr_to_sdr and source_has_hdr10plus(actual_source)
     source_message = translate_text(
         'Actual encode source: {name} (stream {stream}, codec {codec}); output: {output}'
     ).format(
@@ -305,7 +310,7 @@ def _plan_automatic_encoder_metadata(
     except (TaskCancelled, VapourSynthOutputMetadataMismatch):
         raise
     except Exception as error:
-        if verify_resolution:
+        if verify_resolution or hdr_to_sdr:
             raise
         _record_nonblocking_hdr_automation_failure(
             service,
@@ -327,12 +332,12 @@ def _plan_automatic_encoder_metadata(
     service._progress(text=translate_text(
         'Planning automatic encoder metadata parameters: {name}'
     ).format(name=progress_name))
-    include_static_hdr = bit_depth != '8'
+    include_static_hdr = not hdr_to_sdr and bit_depth != '8'
     if chroma_format != 'yuv420':
         actual_source = replace(actual_source, stream={**actual_source.stream, 'chroma_location': None})
     final_metadata = parse_source_color_metadata(actual_source)
     if not include_static_hdr:
-        if source_is_hdr or final_metadata.color_transfer in ('smpte2084', 'arib-std-b67'):
+        if not hdr_to_sdr and (source_is_hdr or final_metadata.color_transfer in ('smpte2084', 'arib-std-b67')):
             _warn_unsupported_hdr_mode(service, 'HDR', encoder_name, bit_depth, output_file, chroma_format)
         final_metadata = replace(
             final_metadata, mastering_display_x26x=None, mastering_display_svt=None, content_light_level=None,
@@ -1363,6 +1368,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             cpu_command: CpuEncodeCommand | None = None,
             chroma_format: str = 'yuv420',
             output_resolution: OutputResolution = OutputResolution(),
+            hdr_to_sdr: bool = False,
+            input_mode: str = 'remux',
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1474,7 +1481,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 )
             _emit_encode_log_line(f'[encode-crop] {crop_message}')
             self._progress(text=crop_message)
-        if str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
+        if not hdr_to_sdr and str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
             dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
             if dv_tid is not None:
                 if encoder not in ('x265', 'hevc') or bd != '10' or chroma_format != 'yuv420':
@@ -1518,14 +1525,21 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
         failure_stage = 'VapourSynth preparation'
         try:
+            source_probe = probe_actual_encode_source(vpy_video_source, cancel_event=cancel_event) if hdr_to_sdr else None
+            sdr_source = hdr_to_sdr_source(source_probe, input_mode=input_mode) if source_probe is not None else None
+            if sdr_source is not None and sdr_source.is_hdr:
+                # Keep HDR precision through the user graph, then quantize the mapped output.
+                bits_int = max(bits_int, 10)
+                self._progress(text=translate_text('Converting HDR to SDR: {name}').format(name=progress_name))
             use_getnative = bool(getattr(self, "use_getnative", True))
             native_info = None
             if use_getnative:
                 automatic_getnative_allowed = True
                 try:
-                    source_width, source_height, _ = probe_video_geometry(
-                        vpy_video_source
-                    )
+                    if source_probe is None:
+                        source_width, source_height, _ = probe_video_geometry(vpy_video_source)
+                    else:
+                        source_width, source_height = (int(source_probe.stream[axis]) for axis in ('width', 'height'))
                 except Exception as error:
                     automatic_getnative_allowed = False
                     message = translate_text(
@@ -1738,7 +1752,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             script = Path(vpy_path)
             script.write_text(
-                vpy_with_output_format(script.read_text(encoding='utf-8'), bd, chroma_format, output_resolution),
+                vpy_with_output_format(
+                    script.read_text(encoding='utf-8'), bd, chroma_format, output_resolution, hdr_to_sdr=sdr_source,
+                ),
                 encoding='utf-8', newline='\r\n',
             )
 
@@ -1781,6 +1797,21 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 chroma_format=chroma_format,
                 verify_resolution=output_resolution.enabled,
                 crop_plan=crop_plan,
+                source_probe=source_probe,
+                hdr_to_sdr=hdr_to_sdr,
+            )
+            if sdr_source is not None and sdr_source.is_hdr and (
+                    expected_final_video_metadata is None
+                    or expected_final_video_metadata.color_transfer in (None, 'smpte2084', 'arib-std-b67')
+            ):
+                raise ValueError(translate_text('The VapourSynth output could not be verified as SDR: {path}').format(
+                    path=vpy_video_source,
+                ))
+            encoded_video_bt709 = bool(
+                hdr_to_sdr and expected_final_video_metadata is not None
+                and expected_final_video_metadata.color_range in ('tv', 'limited')
+                and expected_final_video_metadata.color_primaries == expected_final_video_metadata.color_transfer
+                == expected_final_video_metadata.color_matrix == 'bt709'
             )
             expected_size = geometry.output_size if output_resolution.enabled and geometry is not None else None
             if expected_size is not None:
@@ -1930,8 +1961,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         path=encoded_path
                     )
                 )
+            actual_video = probe_actual_encode_source(encoded_path) if hardware_device or hdr_to_sdr else None
             if hardware_device:
-                actual_video = probe_actual_encode_source(encoded_path)
                 verify_encoded_dimensions(encoded_path, actual_video.stream, expected_size)
                 pixels = actual_video.stream.get('pix_fmt')
                 if actual_video.codec_name != encoder or not yuv_format_matches(pixels, chroma_format, bd):
@@ -1940,6 +1971,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     ).format(path=encoded_path))
             elif cpu_command is not None or chroma_format != 'yuv420' or expected_size is not None:
                 command.verify_output(encoded_path, bd, chroma_format, expected_size=expected_size)
+            if hdr_to_sdr:
+                verify_sdr_encode(actual_video, expect_bt709=encoded_video_bt709)
             if encode_dovi_plan and dolby_vision_metadata_active:
                 dolby_vision_verified = False
                 if native_dolby_vision:
@@ -2031,6 +2064,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 track_language_overrides=track_language_overrides,
                 encoded_video_file=encoded_path,
                 encoded_video_hdr=expected_final_video_metadata if hardware_device else None,
+                encoded_video_bt709=encoded_video_bt709,
                 video_timestamps_file=output_timestamps_path,
                 subtitle_file=soft_subtitle,
                 subtitle_language=subtitle_language,

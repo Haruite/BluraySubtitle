@@ -173,7 +173,7 @@ class _DeviceBox(QGroupBox):
             return field, combo
 
         self.codec_field, self.codec = add_selector(codec_label)
-        self.bit_depth_field, self.bit_depth = add_selector('Output bit depth:')
+        self.bit_depth_field, self.bit_depth = add_selector('Output bit depth')
         _, self.preset = add_selector('Preset parameters')
         self.preset.setMaximumWidth(240)
         self.chroma_field, self.chroma = add_selector('Chroma sampling')
@@ -254,7 +254,7 @@ class EncodeDeviceControls(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        self.cpu_box = _DeviceBox(cpu_device_name(), 'Encoder tool:', self.t, self, manage_presets=manage_presets)
+        self.cpu_box = _DeviceBox(cpu_device_name(), 'Encoder tool', self.t, self, manage_presets=manage_presets)
         self.cpu_checkbox = self.cpu_box.checkbox
         self.cpu_checkbox.setObjectName('cpuEncodeDevice')
         self.cpu_checkbox.setChecked(True)

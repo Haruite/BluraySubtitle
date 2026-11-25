@@ -45,6 +45,7 @@ class EncodeSettings:
     cpu_command: CpuEncodeCommand | str | None = None
     chroma_format: str = 'yuv420'
     output_resolution: OutputResolution = OutputResolution()
+    hdr_to_sdr: bool = False
 
     def cpu_encode_choice(self) -> VideoEncodeChoice:
         return VideoEncodeChoice(self.encoder, self.bit_depth, self.encoder_parameters, chroma_format=self.chroma_format)
@@ -449,7 +450,9 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     ]
     if pending_video_rows:
         require_tool_path("VSPIPE_PATH")
-        if any((row.output_resolution or request.settings.output_resolution).enabled for row, _ in pending_video_rows):
+        if request.settings.hdr_to_sdr or any(
+                (row.output_resolution or request.settings.output_resolution).enabled for row, _ in pending_video_rows
+        ):
             require_tool_path("FFPROBE_PATH")
         if tool_path("PLUGIN_PATH"):
             require_tool_path("PLUGIN_PATH")

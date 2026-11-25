@@ -440,6 +440,7 @@ I18N_ZH_TO_EN = {
     '默认启用 getnative': 'Enable getnative by default',
     '默认自动裁剪检测到的黑边': 'Automatically crop detected black borders by default',
     '默认输出对比图': 'Output comparison images by default',
+    '默认将 HDR 转为 SDR': 'Convert HDR to SDR by default',
     '默认检测花屏/坏帧': 'Check corrupted frames by default',
     '花屏/坏帧检测亮度 PSNR 阈值': 'Frame check luma PSNR threshold',
     '花屏/坏帧检测色度 PSNR 阈值': 'Frame check chroma PSNR threshold',
@@ -595,9 +596,18 @@ I18N_ZH_TO_EN = {
     '极速': 'Very Fast',
     '快速': 'Fast',
     '无损音频压缩': 'Lossless audio compression',
-    '自动裁剪黑边（请核对结果）': 'Auto-crop black borders (verify result)',
+    '自动裁剪黑边': 'Auto-crop black borders',
     '自动黑边检测可能出错；请核对压制后的画面。': 'Automatic black-border detection can be wrong; verify the encoded picture.',
     '输出对比图': 'Output comparison images',
+    'HDR 转 SDR': 'Convert HDR to SDR',
+    'HDR 转 SDR 需要格式固定的视频。': 'HDR to SDR conversion requires a constant-format video clip.',
+    '压制器为请求的 SDR 输出写入了 HDR 标记：{path}': 'The encoder wrote HDR signaling for the requested SDR output: {path}',
+    '编码视频的色彩标记与 BT.709 SDR 输出不符：{path}': 'The encoded video color tags do not match the BT.709 SDR output: {path}',
+    '无法确认 VapourSynth 输出已转换为 SDR：{path}': 'The VapourSynth output could not be verified as SDR: {path}',
+    '正在将 HDR 转为 SDR：{name}': 'Converting HDR to SDR: {name}',
+    '此杜比视界来源转 SDR 需要能读取 RPU 的解码器，以及支持 Vulkan 和杜比视界的 vs-placebo 滤镜。': (
+        'This Dolby Vision source requires a decoder that exposes RPU data and a Vulkan-enabled vs-placebo filter for SDR conversion.'
+    ),
     '检测花屏/坏帧': 'Check corrupted frames',
     '已跳过 {width}x{height} 源的自动 getnative。如有需要，请手动运行 src/scripts/getnative_file.py，并把检测参数写入 VPy。': 'Automatic getnative was skipped for {width}x{height} source. Run src/scripts/getnative_file.py manually and write the detected parameters into the VPy if needed.',
     '无法为 getnative 探测源分辨率；已跳过自动分析：{error}': 'Could not probe source resolution for getnative; automatic analysis was skipped: {error}',
@@ -615,8 +625,8 @@ I18N_ZH_TO_EN = {
     '高质': 'High Quality',
     '超高质': 'Very High Quality',
     '极限': 'Extreme',
-    '压制工具：': 'Encoder tool:',
-    '输出位深：': 'Output bit depth:',
+    '压制工具': 'Encoder tool',
+    '输出位深': 'Output bit depth',
     'BD 压制说明：视频轨道转为「重编码」时按蓝光规格固定为 x264 8bit 或 x265 10bit，此处不可更改编码器与位深。': (
         'BD encode follows Blu-ray rules when re-encoding tracks (x264 8-bit or x265 10-bit); encoder and bit depth are fixed here.'
     ),

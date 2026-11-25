@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableW
 
 from src.core.app_config import UiPreferences, WindowPreferences
 from src.core.video_format import OutputResolution
+from src.runtime.hdr_to_sdr import HdrToSdrSource
 from src.runtime.program_update import UpdatePackage
 
 
@@ -186,6 +187,7 @@ class BluraySubtitleGuiBase(QWidget):
         self.use_getnative_checkbox = None
         self.auto_crop_black_borders_checkbox = None
         self.output_comparison_checkbox = None
+        self.hdr_to_sdr_checkbox = None
         self.frame_check_checkbox = None
         self.vpy_processing_row = None
         self.vpy_denoise_strength_spin = None
@@ -378,7 +380,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _create_table_section(self, table: QTableWidget, title: str, description: str, initial_height: int) -> tuple[QGroupBox, QLabel]:
         raise NotImplementedError
 
-    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str, resolution: OutputResolution=OutputResolution()) -> str:
+    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str, resolution: OutputResolution=OutputResolution(), hdr_to_sdr: HdrToSdrSource | None=None) -> str:
         raise NotImplementedError
 
     def _current_encode_lossless_audio_codec(self) -> str:
@@ -541,7 +543,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
         raise NotImplementedError
 
-    def _launch_encode_preview(self, preview_path: str, video_path: str, *, temporary: bool, merge_default: bool, analyze_crop: bool) -> None:
+    def _launch_encode_preview(self, preview_path: str, *, temporary: bool, merge_default: bool, cropped: bool) -> None:
         raise NotImplementedError
 
     def _loaded_playlist(self, path: str) -> PlaylistInventory | None:
@@ -1004,7 +1006,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _update_trim_copyright_tail_checkbox_for_episode_movie_mode(self) -> None:
         raise NotImplementedError
 
-    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str, resolution: OutputResolution=OutputResolution()) -> bool:
+    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str, resolution: OutputResolution=OutputResolution(), hdr_to_sdr: HdrToSdrSource | None=None) -> bool:
         raise NotImplementedError
 
     def _window_geometry_text(self, window: QWidget | None=None) -> str:

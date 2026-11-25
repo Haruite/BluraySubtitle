@@ -1492,3 +1492,10 @@ Windows checks covered the dynamic selector, x264 and x265 4:2:2 and 4:4:4, and 
 
 The Encode request captures a batch resolution and optional row overrides. Preview and Encode share the VPy sizing step. Managed hardsubs render on the resized picture, and the encoder output is checked against the planned dimensions. Dolby Vision L5 offsets account for crop and scale, and HDR10+ retention checks processing windows.
 Windows tests covered Blu-ray and Remux input, mixed CPU and GPU rows, verified VFR timestamps, and NVENC reinjection of HDR10+ and Dolby Vision after resizing.
+
+## Batch HDR to SDR
+
+2026-11-25 · Based on `948e8cc`
+
+A default-off Encode setting applies the same BT.709 tone mapping in preview and encoding. Dolby Vision on UHD Blu-ray uses the Profile 7 base layer. Remux input with Profile 5 uses the decoder's RPU to reconstruct colors. The SDR path verifies color signaling before muxing.
+Windows x264, x265, and NVENC checks covered HDR10, HDR10+, HLG, and Dolby Vision profiles 5, 7, 8.1, and 8.4, including FEL RPU and VFR timestamps. The default HDR path was checked with a source carrying both Dolby Vision and HDR10+.

@@ -688,12 +688,15 @@ class EncodeWorkflowTests(unittest.TestCase):
                 output_path=str(output_folder / 'Episode.mkv'),
                 status='failed',
             ),))
-            service = _BdmvEncodeService(failed_result)
+            for hdr_to_sdr in (False, True):
+                with self.subTest(hdr_to_sdr=hdr_to_sdr):
+                    service = _BdmvEncodeService(failed_result)
+                    batch = replace(request, settings=replace(request.settings, hdr_to_sdr=hdr_to_sdr))
+                    result = service.episodes_encode(batch, threading.Event())
 
-            result = service.episodes_encode(request, threading.Event())
-
-            self.assertIs(result, failed_result)
-            self.assertFalse(staging_folder.exists())
+                    self.assertIs(result, failed_result)
+                    self.assertFalse(staging_folder.exists())
+                    self.assertEqual(service.stage_request.mux_dolby_vision, not hdr_to_sdr)
 
     def test_encoder_failure_stops_before_audio_or_mux(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

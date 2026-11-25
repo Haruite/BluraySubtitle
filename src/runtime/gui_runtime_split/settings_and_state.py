@@ -75,6 +75,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         self.output_comparison_checkbox.setChecked(
             encode.output_comparison_images
         )
+        self.hdr_to_sdr_checkbox.setChecked(encode.hdr_to_sdr)
         self.frame_check_checkbox.setChecked(
             encode.check_corrupted_frames
         )
@@ -281,6 +282,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
                 self.encode_device_controls.restore(selected.encode)
             elif selected.encode.gpu_enabled != previous.encode.gpu_enabled:
                 self.encode_device_controls.set_gpu_enabled(selected.encode.gpu_enabled)
+            if selected.encode.hdr_to_sdr != previous.encode.hdr_to_sdr:
+                self.hdr_to_sdr_checkbox.setChecked(selected.encode.hdr_to_sdr)
             ffmpeg, ffprobe = resolved_tools.get("FFMPEG_PATH", ""), resolved_tools.get("FFPROBE_PATH", "")
             detected = dialog.detected_gpu_devices(ffmpeg, ffprobe)
             if detected is not None or tools_changed or selected.encode.gpu_enabled != previous.encode.gpu_enabled:

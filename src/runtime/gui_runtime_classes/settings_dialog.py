@@ -795,6 +795,8 @@ class SettingsDialog(AnimatedDialog):
             encode_group,
         )
         encode_form.addRow(self.default_output_comparison_checkbox)
+        self.default_hdr_to_sdr_checkbox = QCheckBox(self.t("Convert HDR to SDR by default"), encode_group)
+        encode_form.addRow(self.default_hdr_to_sdr_checkbox)
         self.default_frame_check_checkbox = QCheckBox(
             self.t("Check corrupted frames by default"),
             encode_group,
@@ -1238,6 +1240,7 @@ class SettingsDialog(AnimatedDialog):
         self.default_output_comparison_checkbox.setChecked(
             config.encode.output_comparison_images
         )
+        self.default_hdr_to_sdr_checkbox.setChecked(config.encode.hdr_to_sdr)
         self.default_frame_check_checkbox.setChecked(
             config.encode.check_corrupted_frames
         )
@@ -1357,6 +1360,7 @@ class SettingsDialog(AnimatedDialog):
                 output_comparison_images=(
                     self.default_output_comparison_checkbox.isChecked()
                 ),
+                hdr_to_sdr=self.default_hdr_to_sdr_checkbox.isChecked(),
                 check_corrupted_frames=(
                     self.default_frame_check_checkbox.isChecked()
                 ),
