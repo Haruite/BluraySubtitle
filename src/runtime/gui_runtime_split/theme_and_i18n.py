@@ -130,6 +130,10 @@ def _table_control_colors(selectors: tuple[str, ...], surface: str, edge: str, a
         controls += ('QTableWidget#table2 QComboBox[chapterRange="true"]:enabled',)
     if 'QTableWidget#trackTable' in selectors:
         controls += ('QTableWidget#trackTable QComboBox:enabled',)
+    controls += tuple(
+        f'{table} QComboBox[encodeDeviceName="true"]:enabled'
+        for table in selectors if table in ('QTableWidget#table2', 'QTableWidget#table3')
+    )
     fill = _blend_color(surface, accent, 0.15 if dark else 0.11)
     hover = _blend_color(surface, accent, 0.24 if dark else 0.20)
     border = _blend_color(edge, accent, 0.27 if dark else 0.19)
