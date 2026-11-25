@@ -40,6 +40,16 @@ On macOS, the VideoToolbox ProRes preset determines sampling. The driver can off
 
 Each device processes its assigned rows in table order, and different devices can run concurrently. SP tracks attached to a main output use that output's encoder. The VPy for each row converts output 0 after filtering and hardsubs to that row's bit depth and chroma sampling. VSEdit preview uses the same format.
 
+## Output resolution
+
+In **Blu-ray Encode**, choose **Output resolution** above the lossless audio control. The default, **Original resolution**, uses the dimensions produced by the VPy. The 2160p, 1440p, 1080p, 720p, and custom settings fit the picture inside the selected width and height while preserving its display aspect ratio. For example, a cropped `3840×1600` input fits within 1080p as `1920×800`. Smaller pictures keep their size unless **Allow upscaling** is selected.
+
+In **Custom resolution**, changing either dimension adjusts the other to match the source video’s display aspect ratio. With **Allow upscaling** cleared, the original width and height cap the two inputs. The batch controls use the first available main video as the reference, or the first selected standalone SP video if there is no main video. A row override uses that row’s source.
+
+The batch setting applies to main and SP videos from Blu-ray and Remux sources. Right-click a video row and choose **Output resolution** to override it. VSEdit previews use the selected dimensions and can analyze black borders on the preview source. For a Blu-ray playlist, the encode analyzes the assembled source. Managed subtitles render at the output size, while scaling preserves the frame order and timestamps.
+
+The existing color and format checks govern HDR retention. With a verified resize, Dolby Vision L5 offsets follow the crop and the final picture size. The automatic HDR10+ path retains verified full-frame metadata. If the picture geometry or processing windows cannot be verified, Encode reports the omitted metadata and keeps the encoded video.
+
 ## CPU encoder command
 
 For either Blu-ray or Remux input, the CPU section generates **Encoder command** from the selected tool, bit depth, and chroma sampling. Choose these settings before editing the command. x264 and x265 offer `yuv420`, `yuv422`, and `yuv444`. The bundled SVT-AV1 uses `yuv420`. The default x264 command applies `--profile high422 --output-csp i422` for 4:2:2 and `--profile high444 --output-csp i444` for 4:4:4.

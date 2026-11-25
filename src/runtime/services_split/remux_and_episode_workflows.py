@@ -1770,6 +1770,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 hardware_device=choice.device,
                 cpu_command=cpu_command,
                 chroma_format=choice.chroma_format,
+                output_resolution=row.output_resolution or request.settings.output_resolution,
                 selected_audio_tracks=(
                     row.audio_tracks if request.input_mode == 'remux' else None
                 ),

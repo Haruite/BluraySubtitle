@@ -84,7 +84,7 @@ def stratified_crop_timestamps(
     )
 
 
-def _probe_video_geometry_and_duration(video_path: str) -> tuple[int, int, float]:
+def _probe_video_geometry_and_duration(video_path: str, *, cancel_event=None) -> tuple[int, int, float]:
     ffprobe_path = tool_path("FFPROBE_PATH")
     result = run_command(
         [
@@ -103,6 +103,7 @@ def _probe_video_geometry_and_duration(video_path: str) -> tuple[int, int, float
         text=True,
         encoding='utf-8',
         errors='replace',
+        cancel_event=cancel_event,
     )
     if result.returncode != 0:
         detail = str(result.stderr or result.stdout or '').strip()
@@ -151,13 +152,13 @@ def _valid_crop_rectangles(
     return rectangles
 
 
-def detect_black_borders(video_path: str) -> VideoCropPlan:
+def detect_black_borders(video_path: str, *, cancel_event=None) -> VideoCropPlan:
     """Detect a fixed crop from stratified time seeks without writing images."""
     source_path = os.path.abspath(os.path.normpath(video_path))
     if not os.path.isfile(source_path):
         raise FileNotFoundError(source_path)
     source_width, source_height, duration = _probe_video_geometry_and_duration(
-        source_path
+        source_path, cancel_event=cancel_event,
     )
     sample_count = adaptive_crop_sample_count(duration)
     timestamps = stratified_crop_timestamps(
@@ -196,6 +197,7 @@ def detect_black_borders(video_path: str) -> VideoCropPlan:
             text=True,
             encoding='utf-8',
             errors='replace',
+            cancel_event=cancel_event,
         )
         if result.returncode != 0:
             detail = str(result.stderr or result.stdout or '').strip()

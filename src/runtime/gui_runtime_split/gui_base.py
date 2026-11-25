@@ -12,6 +12,7 @@ from PyQt6.QtCore import QModelIndex, Qt, QProcess
 from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel, QSystemTrayIcon
 
 from src.core.app_config import UiPreferences, WindowPreferences
+from src.core.video_format import OutputResolution
 from src.runtime.program_update import UpdatePackage
 
 
@@ -214,6 +215,9 @@ class BluraySubtitleGuiBase(QWidget):
                 setattr(_fn, "__gui_base_stub__", True)
 
     # BEGIN GENERATED MIXIN CONTRACTS
+    def _add_encode_resolution_action(self, table: QTableWidget, menu: QMenu, index: QModelIndex) -> None:
+        raise NotImplementedError
+
     def _add_or_update_table3_mpls_as_sp(self, bdmv_index: int, mpls_path: str):
         raise NotImplementedError
 
@@ -374,7 +378,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _create_table_section(self, table: QTableWidget, title: str, description: str, initial_height: int) -> tuple[QGroupBox, QLabel]:
         raise NotImplementedError
 
-    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str) -> str:
+    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str, resolution: OutputResolution=OutputResolution()) -> str:
         raise NotImplementedError
 
     def _current_encode_lossless_audio_codec(self) -> str:
@@ -408,6 +412,18 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _effective_encode_params(self) -> str:
+        raise NotImplementedError
+
+    def _encode_resolution_source_path(self) -> str:
+        raise NotImplementedError
+
+    def _encode_row_resolution(self, table: QTableWidget, row: int) -> OutputResolution | None:
+        raise NotImplementedError
+
+    def _encode_row_source_key(self, table: QTableWidget, row: int) -> tuple[str, ...] | None:
+        raise NotImplementedError
+
+    def _encode_row_video_path(self, table: QTableWidget, row: int, *, choose_clip: bool=False) -> str:
         raise NotImplementedError
 
     def _end_delayed_busy(self, state: Optional[dict[str, object]]):
@@ -506,6 +522,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _is_auto_chapter_segment_sp_item(out_item: Optional[QTableWidgetItem]) -> bool:
         raise NotImplementedError
 
+    def _is_independent_sp_video_row(self, row: int) -> bool:
+        raise NotImplementedError
+
     @staticmethod
     def _is_lossless_audio_stream_dict(s: dict[str, object]) -> bool:
         raise NotImplementedError
@@ -520,6 +539,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
+        raise NotImplementedError
+
+    def _launch_encode_preview(self, preview_path: str, video_path: str, *, temporary: bool, merge_default: bool, analyze_crop: bool) -> None:
         raise NotImplementedError
 
     def _loaded_playlist(self, path: str) -> PlaylistInventory | None:
@@ -830,7 +852,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _segment_diff_mpls(self, prev: dict[str, object], cur: dict[str, object]) -> set[str]:
         raise NotImplementedError
 
-    def _select_video_path(self, bdmv_index: int, m2ts_files: list[str]) -> str:
+    def _select_video_path(self, bdmv_index: int, m2ts_files: list[str], *, choose_clip: bool=True) -> str:
         raise NotImplementedError
 
     def _selected_output_bits_for_vpy(self) -> int:
@@ -982,7 +1004,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _update_trim_copyright_tail_checkbox_for_episode_movie_mode(self) -> None:
         raise NotImplementedError
 
-    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str) -> bool:
+    def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str, resolution: OutputResolution=OutputResolution()) -> bool:
         raise NotImplementedError
 
     def _window_geometry_text(self, window: QWidget | None=None) -> str:

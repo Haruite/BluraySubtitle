@@ -690,7 +690,7 @@ class DolbyVisionTests(unittest.TestCase):
                 b'partial',
             )
 
-    def test_crop_edit_subtracts_physical_margins_from_every_l5_preset(self) -> None:
+    def test_crop_and_resize_map_every_dolby_vision_l5_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             source_rpu = root / 'source-rpu.bin'
@@ -767,23 +767,25 @@ class DolbyVisionTests(unittest.TestCase):
                     str(output_rpu),
                     crop_plan,
                     str(root),
+                    resize_input=(1898, 880),
+                    resize_output=(948, 440),
                 )
 
             active_area = captured_editor_config['active_area']
             self.assertEqual(active_area['edits'], {'all': 0, '100-199': 1})
             self.assertEqual(active_area['presets'][0], {
                 'id': 0,
-                'left': 10,
-                'right': 12,
-                'top': 40,
-                'bottom': 42,
+                'left': 5,
+                'right': 6,
+                'top': 20,
+                'bottom': 21,
             })
             self.assertEqual(active_area['presets'][1], {
                 'id': 1,
                 'left': 0,
                 'right': 0,
-                'top': 100,
-                'bottom': 100,
+                'top': 50,
+                'bottom': 50,
             })
             self.assertEqual(output_rpu.read_bytes(), b'edited')
 

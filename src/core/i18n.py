@@ -17,6 +17,34 @@ I18N_ZH_TO_EN = {
     '压制参数': 'Encoder parameters',
     '压制命令': 'Encoder command',
     '色度采样': 'Chroma sampling',
+    '输出分辨率': 'Output resolution',
+    '原分辨率': 'Original resolution',
+    '跟随批次设置': 'Follow batch setting',
+    '自定义分辨率': 'Custom resolution',
+    '最大宽度': 'Maximum width',
+    '最大高度': 'Maximum height',
+    '允许放大': 'Allow upscaling',
+    '请先加载视频来源以设置自定义分辨率。': 'Load a video source to set a custom resolution.',
+    '正在读取原视频分辨率…': 'Reading source resolution…',
+    '无法读取原视频分辨率：{error}': 'Could not read source resolution: {error}',
+    'FFprobe 返回的视频尺寸无效。': 'FFprobe returned invalid video dimensions.',
+    '保持画幅比例并缩放到所选宽高范围内。': 'Fit the picture within the selected width and height while keeping its aspect ratio.',
+    '输出分辨率无效。': 'Invalid output resolution.',
+    '输出分辨率设置需要尺寸固定的 VapourSynth 视频。': 'Output resolution requires a constant-size VapourSynth clip.',
+    '目标分辨率过小，无法满足画幅比例和色度采样要求。': 'Output resolution is too small for the video aspect ratio and chroma sampling.',
+    '无法确定缩放后的 VapourSynth 输出尺寸：{path}': 'Could not determine the resized VapourSynth output: {path}',
+    '{name} 的输出分辨率：{width}×{height}': 'Output resolution for {name}: {width}×{height}',
+    '压制后的视频分辨率不符，预期为 {expected}，实际为 {actual}。请检查 {path}。': (
+        'Encoded video resolution mismatch: expected {expected}, got {actual}. Check {path}.'
+    ),
+    '无法校验缩放后的 HDR10+ 处理窗口。': 'HDR10+ processing windows cannot be verified for the resized picture.',
+    'VapourSynth 画幅无法与来源对应，HDR10+ 元数据将省略：{path}': (
+        'HDR10+ metadata will not be retained because the VapourSynth picture geometry cannot be mapped to the source: {path}'
+    ),
+    'VapourSynth 画幅无法与来源对应，Dolby Vision 元数据将省略：{path}': (
+        'Dolby Vision metadata will not be retained because the VapourSynth picture geometry '
+        'cannot be mapped to the source: {path}'
+    ),
     '正在检测格式…': 'Checking formats...',
     '无兼容格式': 'No compatible format',
     '色度采样不受支持：{chroma}': 'Unsupported chroma sampling: {chroma}',

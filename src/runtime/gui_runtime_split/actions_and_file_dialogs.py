@@ -18,7 +18,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QSizePolicy, QRadioButton, QButtonGroup, QCheckBox, \
-    QDoubleSpinBox, QGridLayout
+    QDoubleSpinBox, QGridLayout, QDialogButtonBox
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
@@ -26,6 +26,7 @@ from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, 
     MPLS_INFO_TRACKS_LABELS
 from src.core.i18n import translate_text
 from src.core.tool_paths import ENCODER_PATH_NAMES, require_tool_path, tool_path
+from src.core.video_format import OutputResolution
 from src.core.encode_presets import (
     ENCODE_PRESET_NAMES,
     encode_presets_for_encoder,
@@ -45,6 +46,7 @@ from src.runtime.encode_command import default_cpu_encode_command, format_encode
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
+from src.runtime.gui_runtime_classes.output_resolution_controls import OutputResolutionControls
 from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
 from src.runtime.gui_runtime_classes.spin_box import StyledDoubleSpinBox
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
@@ -200,6 +202,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.encode_command_row.setVisible(show_full_codec)
         if show_full_codec:
             self._refresh_cpu_encode_command()
+        self.encode_resolution_row.setVisible(show_full_codec)
         hint = getattr(self, 'diy_bd_encode_hint_label', None)
         self.encode_audio_row.setVisible(show_full_codec)
         if hint is not None:
@@ -890,6 +893,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 encoder=encoder,
                 bit_depth=bit_depth,
                 chroma_format=self.encode_device_controls.cpu_box.chroma.currentData() or 'yuv420',
+                output_resolution=self.encode_resolution_row.selected_resolution(),
                 use_getnative=bool(
                     getattr(self, 'use_getnative_checkbox', None)
                     and self.use_getnative_checkbox.isChecked()
@@ -1040,6 +1044,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
                         subtitle_language=language,
                         video_encode=captured_video_device(self.table2, row_index, required=not output_is_checkpoint),
+                        output_resolution=self._encode_row_resolution(self.table2, row_index),
                         **captured_track_options(
                             media_track_key('mkv', source_path),
                             row_index + 1,
@@ -1075,6 +1080,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                 self.table3, row_index,
                                 required=not output_is_checkpoint and output_extension == '.mkv',
                             ),
+                            output_resolution=self._encode_row_resolution(self.table3, row_index),
                             **captured_track_options(
                                 media_track_key('mkvsp', source_path),
                                 row_index + 1,
@@ -1132,6 +1138,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         configuration_key=configuration_key,
                         configuration=row_configuration,
                         video_encode=captured_video_device(self.table2, row_index),
+                        output_resolution=self._encode_row_resolution(self.table2, row_index),
                         **captured_track_options(main_track_key, row_index + 1),
                     ))
 
@@ -1160,6 +1167,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             sp_entry=sp_entry,
                             selected=bool(sp_entry.selected and output_name),
                             uses_main_output=uses_main_output,
+                            output_resolution=self._encode_row_resolution(self.table3, row_index),
                             video_encode=captured_video_device(
                                 self.table3, row_index,
                                 required=bool(
@@ -1755,6 +1763,14 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.use_bluray_compat_params_checkbox.setChecked(False)
         primary_options.addWidget(self.use_bluray_compat_params_checkbox)
         layout.addWidget(tools_row)
+        self.encode_resolution_row = OutputResolutionControls(
+            self.t, self.encode_box, source_for_custom=self._encode_resolution_source_path,
+        )
+        for table in (self.table2, self.table3):
+            model = table.model()
+            for changed in (model.dataChanged, model.rowsInserted, model.rowsRemoved, model.modelReset):
+                changed.connect(self.encode_resolution_row.schedule_source_refresh)
+        layout.addWidget(self.encode_resolution_row)
         layout.addWidget(audio_row)
 
         self.vpy_processing_row = QWidget(self.encode_box)
@@ -2354,6 +2370,69 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return
         if folder:
             self._subtitle_scan_debounce.start()
+
+    def _encode_resolution_source_path(self) -> str:
+        if self.get_selected_function_id() != 4 or self._close_pending:
+            return ''
+        for table in (self.table2, self.table3):
+            for row in range(table.rowCount()):
+                if table is self.table3 and not self._is_independent_sp_video_row(row):
+                    continue
+                if path := self._encode_row_video_path(table, row):
+                    return path
+        return ''
+
+    def _encode_row_resolution(self, table: QTableWidget, row: int) -> OutputResolution | None:
+        identity = self._encode_row_source_key(table, row)
+        return self._encode_resolution_by_source.get(identity) if identity is not None else None
+
+    def _add_encode_resolution_action(self, table: QTableWidget, menu: QMenu, index: QModelIndex) -> None:
+        if self.get_selected_function_id() != 4:
+            return
+        row = index.row()
+        labels = table.property('columnKeys') or ()
+        if 'vpy_path' not in labels:
+            return
+        identity = self._encode_row_source_key(table, row)
+        if identity is None:
+            return
+        if table is self.table3 and not self._is_independent_sp_video_row(row):
+            return
+
+        def edit_resolution():
+            source = self._encode_row_video_path(table, row)
+            dialog = AnimatedDialog(self)
+            dialog.setWindowTitle(self.t('Output resolution'))
+            layout = QVBoxLayout(dialog)
+            controls = OutputResolutionControls(self.t, dialog, source_for_custom=lambda: source, allow_inherit=True)
+            layout.addWidget(controls)
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, parent=dialog,
+            )
+            okay = buttons.button(QDialogButtonBox.StandardButton.Ok)
+            okay.setText(self.t('OK'))
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(self.t('Cancel'))
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            controls.ready_changed.connect(okay.setEnabled)
+            controls.set_resolution(self._encode_resolution_by_source.get(identity))
+            layout.addWidget(buttons)
+            self._apply_window_opacity(dialog)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                resolution = controls.selected_resolution()
+                if resolution is None:
+                    self._encode_resolution_by_source.pop(identity, None)
+                else:
+                    self._encode_resolution_by_source[identity] = resolution
+            dialog.deleteLater()
+
+        caption = self.t('Output resolution')
+        override = self._encode_resolution_by_source.get(identity)
+        if override is not None:
+            value = f'{override.width}×{override.height}' if override.enabled else self.t('Original resolution')
+            caption = f'{caption} ({value})'
+        action = menu.addAction(caption)
+        action.triggered.connect(edit_resolution)
 
     def on_subtitle_menu(self, menu: QMenu, index: QModelIndex):
         path_column = SUBTITLE_LABELS.index('path')

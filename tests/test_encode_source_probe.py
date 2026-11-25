@@ -32,6 +32,8 @@ class EncodeSourceProbeTests(unittest.TestCase):
                 0,
                 'hevc',
                 {
+                    'width': 3840,
+                    'height': 2160,
                     'color_range': 'tv',
                     'color_primaries': 'bt2020',
                     'color_transfer': 'smpte2084',
@@ -55,6 +57,8 @@ class EncodeSourceProbeTests(unittest.TestCase):
                     json.dumps({
                         'timeline': [3, 24_000, 1_001],
                         'samples': [properties, properties, properties],
+                        'size': [1920, 800],
+                        'resize_input_size': [3840, 1600],
                     }),
                     encoding='utf-8',
                 )
@@ -76,6 +80,9 @@ class EncodeSourceProbeTests(unittest.TestCase):
             self.assertEqual(result.stream['side_data_list'], [])
             self.assertTrue(color_changed)
             self.assertEqual(timeline, (3, 24_000, 1_001))
+            self.assertEqual(result.geometry.source_size, (3840, 2160))
+            self.assertEqual(result.geometry.resize_input_size, (3840, 1600))
+            self.assertEqual(result.geometry.output_size, (1920, 800))
 
     def test_frame_count_comes_from_output_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

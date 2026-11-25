@@ -229,6 +229,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     scroll_handle = {'light': '#8b929a', 'dark': '#6e727a', 'colorful': '#a78bfa'}[mode]
     scroll_hover = {'light': '#656d77', 'dark': '#989ca4', 'colorful': _COLORFUL_ACCENT}[mode]
     styles = [
+        f'QCheckBox#cpuEncodeDevice:disabled{{color:{text};}}',
         f'{_SCROLL_BAR_GEOMETRY}'
         f'QScrollBar::handle{{background:{scroll_handle};}}'
         f'QScrollBar::handle:hover,QScrollBar::handle:pressed{{background:{scroll_hover};}}'

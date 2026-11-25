@@ -25,6 +25,7 @@ from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
 from src.core.i18n import translate_text
 from src.core.tool_paths import active_tool_paths, resolve_tool_paths
+from src.core.video_format import OutputResolution
 import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal, third_party_notices_markdown_path
 from src.runtime.application_log import ApplicationLog
@@ -97,6 +98,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         }
         self._auto_output_folders = {3: '', 4: '', 5: ''}
         self._encode_device_by_source: dict[tuple[str, ...], str] = {}
+        self._encode_resolution_by_source: dict[tuple[str, ...], OutputResolution] = {}
         self._bdmv_source_state_path = ''
         self._bdmv_load_pending = False
         self._bdmv_load_replaced = False
@@ -747,6 +749,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._set_table2_subtitle_column_order()
         self.table2.horizontalHeader().setSectionsClickable(False)
         self.table2.cellMenuCreated.connect(self.on_subtitle_menu)
+        self.table2.cellMenuCreated.connect(lambda menu, index: self._add_encode_resolution_action(self.table2, menu, index))
         self.table2.model().dataChanged.connect(self._on_main_output_name_changed)
         self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
         self._subtitle_scan_debounce = QTimer(self)
@@ -769,6 +772,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.table3.horizontalHeader().setSectionsMovable(False)
         self._updating_sp_table = False
         self.table3.itemChanged.connect(self._on_table3_item_changed)
+        self.table3.cellMenuCreated.connect(lambda menu, index: self._add_encode_resolution_action(self.table3, menu, index))
         self.table2_section, self.table2_description = self._create_table_section(
             self.table2, 'Main outputs',
             'One row per main output. Adjust chapter ranges, output names and optional subtitles.',

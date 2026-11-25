@@ -274,17 +274,20 @@ def prepare_dolby_vision_encode(
 def edit_dolby_vision_rpu_for_crop(
         source_rpu: str,
         output_rpu: str,
-        crop_plan: VideoCropPlan,
+        crop_plan: VideoCropPlan | None,
         work_folder: str,
+        *,
+        resize_input: tuple[int, int] | None = None,
+        resize_output: tuple[int, int] | None = None,
 ) -> None:
-    """Subtract a fixed physical crop from every Dolby Vision L5 preset."""
-    if not crop_plan.has_crop:
-        raise ValueError('Dolby Vision RPU crop requires non-zero margins')
+    """Map every L5 active area through the physical crop and optional resize."""
+    if not (crop_plan is not None and crop_plan.has_crop) and resize_input == resize_output:
+        raise ValueError('Dolby Vision L5 editing requires a change in picture geometry')
     dovi_tool = dolby_vision_tool_path()
     if not dovi_tool:
         raise FileNotFoundError(translate_text('dovi_tool executable does not exist'))
     level5_path = os.path.join(work_folder, 'rpu-level5.json')
-    editor_path = os.path.join(work_folder, 'rpu-crop-editor.json')
+    editor_path = os.path.join(work_folder, 'rpu-geometry-editor.json')
     export_result = run_command(
         [
             dovi_tool,
@@ -323,10 +326,7 @@ def edit_dolby_vision_rpu_for_crop(
                 active_area['crop'] = True
             else:
                 margins = {
-                    'left': crop_plan.left,
-                    'right': crop_plan.right,
-                    'top': crop_plan.top,
-                    'bottom': crop_plan.bottom,
+                    side: getattr(crop_plan, side, 0) for side in ('left', 'right', 'top', 'bottom')
                 }
                 for preset in presets:
                     if not isinstance(preset, dict):
@@ -337,7 +337,17 @@ def edit_dolby_vision_rpu_for_crop(
                             raise ValueError(
                                 f'Dolby Vision L5 {side} offset must be a non-negative integer'
                             )
-                        preset[side] = max(0, value - physical_crop)
+                        offset = max(0, value - physical_crop)
+                        if resize_input is not None and resize_output is not None:
+                            axis = 0 if side in ('left', 'right') else 1
+                            denominator = resize_input[axis]
+                            offset = (offset * resize_output[axis] + denominator // 2) // denominator
+                        preset[side] = offset
+                    if resize_output is not None and (
+                            preset['left'] + preset['right'] >= resize_output[0]
+                            or preset['top'] + preset['bottom'] >= resize_output[1]
+                    ):
+                        raise ValueError('Dolby Vision L5 active area falls outside the resized picture')
                 active_area.pop('crop', None)
         with open(editor_path, 'w', encoding='utf-8', newline='') as stream:
             stream.write(

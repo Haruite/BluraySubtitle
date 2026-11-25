@@ -1485,3 +1485,10 @@ An offscreen Remux-source task launched rav1e from the visible command and compl
 Per-device settings capture chroma sampling with bit depth. A managed VPy conversion applies the row's output format, and x264 generates matching profile and color-space options.
 GPU discovery lists driver capabilities. Short encodes of the current selection populate the chroma dropdown after FFprobe verifies the actual output. ProRes sampling follows its preset.
 Windows checks covered the dynamic selector, x264 and x265 4:2:2 and 4:4:4, and RTX 5070 NVENC and Vulkan trials. A mixed-device Remux-source task produced verified 10-bit x264 4:4:4 and NVENC HEVC 4:2:2 MKVs.
+
+## Output resolution for Encode
+
+2026-11-25 · Based on `e76d350`
+
+The Encode request captures a batch resolution and optional row overrides. Preview and Encode share the VPy sizing step. Managed hardsubs render on the resized picture, and the encoder output is checked against the planned dimensions. Dolby Vision L5 offsets account for crop and scale, and HDR10+ retention checks processing windows.
+Windows tests covered Blu-ray and Remux input, mixed CPU and GPU rows, verified VFR timestamps, and NVENC reinjection of HDR10+ and Dolby Vision after resizing.

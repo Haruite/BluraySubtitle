@@ -22,12 +22,13 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.tool_paths import bundle_directory, is_bundled_tool, tool_path
-from ...core.video_format import yuv_format_matches
+from ...core.video_format import OutputResolution, yuv_format_matches
 from .service_base import BluraySubtitleServiceBase
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.audio_conversion import AudioEncodingSettings, mux_with_audio_conversion
 from src.runtime.dolby_vision import (
     DolbyVisionEncodePlan,
+    edit_dolby_vision_rpu_for_crop,
     inject_dolby_vision_rpu,
     prepare_dolby_vision_encode,
     verify_dolby_vision_rpu,
@@ -44,8 +45,10 @@ from src.runtime.encode_source import (
     probe_actual_encode_source,
     probe_vapoursynth_frame_count,
     probe_vapoursynth_output_metadata,
+    probe_video_geometry,
     probe_x265_dynamic_metadata_options,
     source_has_hdr10plus,
+    verify_encoded_dimensions,
     verify_final_video_metadata,
     verify_hdr10plus_metadata,
     write_hdr_metadata_error_report,
@@ -66,7 +69,7 @@ from src.runtime.video_crop import (
     detect_black_borders,
     write_vapoursynth_crop,
 )
-from src.runtime.vpy_output import vpy_with_output_format
+from src.runtime.vpy_output import VpyOutputGeometry, remove_vpy_output_format, vpy_with_output_format
 from src.runtime import TaskCancelled, worker_process_context
 from ...core.i18n import translate_text
 from ...exports.utils import (
@@ -119,43 +122,6 @@ def _emit_encode_log_line(message: str, *, translate: bool = True) -> None:
         print_terminal_line(message, translate=translate)
     except Exception:
         print(message, flush=True)
-
-
-def _probe_video_dimensions(video_path: str) -> tuple[int, int]:
-    """Return the first video stream dimensions without decoding the full source."""
-    result = run_command(
-        [
-            tool_path("FFPROBE_PATH"),
-            '-v',
-            'error',
-            '-select_streams',
-            'v:0',
-            '-show_entries',
-            'stream=width,height',
-            '-of',
-            'json',
-            video_path,
-        ],
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        errors='replace',
-    )
-    if result.returncode != 0:
-        detail = str(result.stderr or result.stdout or '').strip()
-        raise RuntimeError(
-            detail or f'ffprobe exited with code {result.returncode}'
-        )
-    try:
-        payload = json.loads(result.stdout or '{}')
-        stream = (payload.get('streams') or [])[0]
-        width = int(stream['width'])
-        height = int(stream['height'])
-    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise RuntimeError('ffprobe returned invalid video dimensions') from error
-    if width <= 0 or height <= 0:
-        raise RuntimeError('ffprobe returned invalid video dimensions')
-    return width, height
 
 
 def _read_getnative_progress_messages(
@@ -252,6 +218,8 @@ def _plan_automatic_encoder_metadata(
         hardware: bool = False,
         add_encoder_metadata: bool = True,
         chroma_format: str = 'yuv420',
+        verify_resolution: bool = False,
+        crop_plan: VideoCropPlan | None = None,
 ) -> tuple[
     tuple[str, ...],
     bool,
@@ -260,6 +228,7 @@ def _plan_automatic_encoder_metadata(
     SourceColorMetadata | None,
     int | None,
     int | None,
+    VpyOutputGeometry | None,
 ]:
     """Probe one actual source and add only metadata options absent from the GUI."""
     progress_name = str(
@@ -272,11 +241,14 @@ def _plan_automatic_encoder_metadata(
     vpy_timeline = None
     source_frame_count = None
     hdr10plus_metadata_prepared = False
+    geometry = None
     try:
         actual_source = probe_actual_encode_source(source_path)
     except TaskCancelled:
         raise
     except Exception as error:
+        if verify_resolution:
+            raise
         _record_nonblocking_hdr_automation_failure(
             service,
             output_file,
@@ -291,6 +263,7 @@ def _plan_automatic_encoder_metadata(
             vpy_color_changed,
             False,
             False,
+            None,
             None,
             None,
             None,
@@ -332,6 +305,8 @@ def _plan_automatic_encoder_metadata(
     except (TaskCancelled, VapourSynthOutputMetadataMismatch):
         raise
     except Exception as error:
+        if verify_resolution:
+            raise
         _record_nonblocking_hdr_automation_failure(
             service,
             output_file,
@@ -341,6 +316,14 @@ def _plan_automatic_encoder_metadata(
             'encoding will continue: {path}. Error report: {report}',
             error,
         )
+    else:
+        geometry = actual_source.geometry
+    if verify_resolution and (geometry is None or geometry.resize_input_size is None):
+        raise RuntimeError(translate_text('Could not determine the resized VapourSynth output: {path}').format(path=vpy_path))
+    source_after_crop = (
+        (crop_plan.output_width, crop_plan.output_height) if crop_plan is not None else
+        geometry.source_size if geometry is not None else None
+    )
     service._progress(text=translate_text(
         'Planning automatic encoder metadata parameters: {name}'
     ).format(name=progress_name))
@@ -407,12 +390,20 @@ def _plan_automatic_encoder_metadata(
                 'HDR10+ metadata will not be retained because the VapourSynth output changed '
                 'color primaries or transfer characteristics: {path}'
             ).format(path=output_file))
+        elif verify_resolution and geometry is not None and not geometry.follows_source_geometry(source_after_crop):
+            _record_encode_warning(service, translate_text(
+                'HDR10+ metadata will not be retained because the VapourSynth picture geometry '
+                'cannot be mapped to the source: {path}'
+            ).format(path=output_file))
         else:
             try:
                 extract_hdr10plus_metadata(
                     actual_source,
                     hdr10plus_json_path,
                     vpy_timeline,
+                    require_full_frame=bool(verify_resolution and geometry and (
+                        geometry.was_resized or (crop_plan is not None and crop_plan.has_crop)
+                    )),
                 )
             except TaskCancelled:
                 raise
@@ -485,6 +476,7 @@ def _plan_automatic_encoder_metadata(
         final_metadata,
         vpy_timeline[0] if vpy_timeline is not None else None,
         source_frame_count,
+        geometry,
     )
 
 
@@ -1370,6 +1362,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             hardware_device: GpuEncodeDevice | None = None,
             cpu_command: CpuEncodeCommand | None = None,
             chroma_format: str = 'yuv420',
+            output_resolution: OutputResolution = OutputResolution(),
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1438,7 +1431,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 self._progress(text=translate_text(
                     'Analyzing black borders: {name}'
                 ).format(name=progress_name))
-                crop_plan = detect_black_borders(src_mkv)
+                crop_plan = detect_black_borders(src_mkv, cancel_event=cancel_event)
             except TaskCancelled:
                 raise
             except Exception as error:
@@ -1498,7 +1491,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             for track in source_info.get('tracks', []) if track.get('id') == dv_tid
                         ), None)
                         encode_dovi_plan = prepare_dolby_vision_encode(
-                            src_mkv, int(dv_tid), output_folder, crop_plan,
+                            src_mkv, int(dv_tid), output_folder, None if output_resolution.enabled else crop_plan,
                             default_duration_ns=default_duration_ns,
                             check_cancel=self._progress,
                         )
@@ -1530,7 +1523,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if use_getnative:
                 automatic_getnative_allowed = True
                 try:
-                    source_width, source_height = _probe_video_dimensions(
+                    source_width, source_height, _ = probe_video_geometry(
                         vpy_video_source
                     )
                 except Exception as error:
@@ -1580,7 +1573,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     return
                 try:
                     with open(vpy_path, 'r', encoding='utf-8') as fp:
-                        lines = fp.readlines()
+                        lines = remove_vpy_output_format(fp.read()).splitlines(keepends=True)
                 except Exception:
                     print_exc_terminal()
                     return
@@ -1745,7 +1738,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             script = Path(vpy_path)
             script.write_text(
-                vpy_with_output_format(script.read_text(encoding='utf-8'), bd, chroma_format),
+                vpy_with_output_format(script.read_text(encoding='utf-8'), bd, chroma_format, output_resolution),
                 encoding='utf-8', newline='\r\n',
             )
 
@@ -1768,6 +1761,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 expected_final_video_metadata,
                 expected_output_frames,
                 source_frame_count,
+                geometry,
             ) = _plan_automatic_encoder_metadata(
                 self,
                 output_file,
@@ -1780,12 +1774,48 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 bd,
                 manual_arguments,
                 hdr10plus_json_path,
-                encode_dovi_plan.rpu_path if encode_dovi_plan else '',
+                encode_dovi_plan.rpu_path if encode_dovi_plan and not output_resolution.enabled else '',
                 progress_name,
                 hardware=hardware_device is not None,
                 add_encoder_metadata=command is None or command.uses_metadata,
                 chroma_format=chroma_format,
+                verify_resolution=output_resolution.enabled,
+                crop_plan=crop_plan,
             )
+            expected_size = geometry.output_size if output_resolution.enabled and geometry is not None else None
+            if expected_size is not None:
+                self._progress(text=translate_text('Output resolution for {name}: {width}×{height}').format(
+                    name=progress_name, width=expected_size[0], height=expected_size[1],
+                ))
+            dolby_vision_geometry_valid = True
+            if output_resolution.enabled and encode_dovi_plan is not None and not vpy_color_changed:
+                after_crop = (
+                    (crop_plan.output_width, crop_plan.output_height) if crop_plan is not None else geometry.source_size
+                )
+                if not geometry.follows_source_geometry(after_crop):
+                    dolby_vision_geometry_valid = False
+                    _record_encode_warning(self, translate_text(
+                        'Dolby Vision metadata will not be retained because the VapourSynth picture geometry '
+                        'cannot be mapped to the source: {path}'
+                    ).format(path=output_file))
+                elif geometry.was_resized or (crop_plan is not None and crop_plan.has_crop):
+                    adjusted_rpu = os.path.join(encode_dovi_plan.work_folder, 'rpu-resized.bin')
+                    try:
+                        edit_dolby_vision_rpu_for_crop(
+                            encode_dovi_plan.rpu_path, adjusted_rpu, crop_plan, encode_dovi_plan.work_folder,
+                            resize_input=geometry.resize_input_size, resize_output=geometry.output_size,
+                        )
+                    except TaskCancelled:
+                        raise
+                    except Exception as error:
+                        dolby_vision_geometry_valid = False
+                        _record_nonblocking_hdr_automation_failure(
+                            self, output_file, src_mkv, 'Dolby Vision preparation',
+                            'Dolby Vision metadata could not be prepared. Encoding will continue: '
+                            '{path}. Error report: {report}', error,
+                        )
+                    else:
+                        encode_dovi_plan = replace(encode_dovi_plan, rpu_path=adjusted_rpu)
             failure_stage = 'Video timestamp preparation'
             if expected_output_frames is None:
                 expected_output_frames = probe_vapoursynth_frame_count(
@@ -1824,7 +1854,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 '--dhdr10-info',
             )
             failure_stage = 'VapourSynth preparation'
-            dolby_vision_metadata_active = bool(encode_dovi_plan and not vpy_color_changed)
+            dolby_vision_metadata_active = bool(encode_dovi_plan and not vpy_color_changed and dolby_vision_geometry_valid)
             if encode_dovi_plan and vpy_color_changed:
                 _record_encode_warning(self, translate_text(
                     'Dolby Vision metadata will not be retained because the '
@@ -1902,13 +1932,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 )
             if hardware_device:
                 actual_video = probe_actual_encode_source(encoded_path)
+                verify_encoded_dimensions(encoded_path, actual_video.stream, expected_size)
                 pixels = actual_video.stream.get('pix_fmt')
                 if actual_video.codec_name != encoder or not yuv_format_matches(pixels, chroma_format, bd):
                     raise RuntimeError(translate_text(
                         'Hardware encoder did not produce the selected codec, bit depth and chroma sampling: {path}'
                     ).format(path=encoded_path))
-            elif cpu_command is not None or chroma_format != 'yuv420':
-                command.verify_output(encoded_path, bd, chroma_format)
+            elif cpu_command is not None or chroma_format != 'yuv420' or expected_size is not None:
+                command.verify_output(encoded_path, bd, chroma_format, expected_size=expected_size)
             if encode_dovi_plan and dolby_vision_metadata_active:
                 dolby_vision_verified = False
                 if native_dolby_vision:

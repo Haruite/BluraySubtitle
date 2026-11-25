@@ -677,7 +677,6 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         m2ts_col = labels.index('m2ts_file')
         type_col = labels.index('m2ts_type')
         dur_col = labels.index('duration')
-        device_col = labels.index('video_encode_device') if function_id == 4 else -1
         try:
             single_output_movie = bool(self._is_movie_mode() and self.table2.rowCount() == 1)
         except Exception:
@@ -712,9 +711,6 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             seq = 0
             for r in rows:
                 yield
-                device_combo = self.table3.cellWidget(r, device_col) if device_col >= 0 else None
-                if device_combo is not None:
-                    device_combo.hide()
                 out_item = self.table3.item(r, out_col)
                 if not out_item:
                     out_item = SpOutputNameItem('')
@@ -740,22 +736,25 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 type_item = self.table3.item(r, type_col)
                 m2ts_type = type_item.text().strip() if type_item else ''
                 video_only = bool(type_item and type_item.data(Qt.ItemDataRole.UserRole))
-                if not selected:
-                    out_item.setText('')
-                    continue
-                m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
-                m2ts_files_unique = list(dict.fromkeys(m2ts_files))
 
                 def _set_sp_out(rel: str):
-                    if episode_name is None:
+                    if not rel:
+                        path = ''
+                    elif episode_name is None:
                         edited_name = out_item.data(Qt.ItemDataRole.UserRole)
                         path = f'SPs/{rel}' if edited_name is None else edited_name
                     else:
                         out_item.setData(_SP_EPISODE_OUTPUT_KEY_ROLE, episode_key)
                         path = episode_name
                     out_item.setText(path)
-                    if device_combo is not None:
-                        device_combo.setVisible(episode_name is None and path.lower().endswith('.mkv'))
+                    if function_id == 4:
+                        self._update_encode_device_cell(self.table3, r)
+
+                if not selected:
+                    _set_sp_out('')
+                    continue
+                m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
+                m2ts_files_unique = list(dict.fromkeys(m2ts_files))
 
                 if episode_name is None:
                     seq += 1
@@ -826,7 +825,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         and (special == '')
                         and len(m2ts_files_unique) < 3
                     ):
-                        out_item.setText('')
+                        _set_sp_out('')
                     else:
                         _set_sp_out(f'{base_with_suffix}.mkv')
                     continue
@@ -840,7 +839,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     if video_only or (mpls_file and len(m2ts_files_unique) >= 3):
                         _set_sp_out(f'{base_with_suffix}.mkv')
                     else:
-                        out_item.setText('')
+                        _set_sp_out('')
                     continue
                 is_audio_only = False
                 if m2ts_files:
@@ -917,14 +916,14 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     continue
                 if not mpls_file:
                     if m2ts_type in ('private_or_other', 'mixed_non_video'):
-                        out_item.setText('')
+                        _set_sp_out('')
                         continue
                     if m2ts_type == 'audio_with_subtitle':
                         _set_sp_out(f'{base_with_suffix}.mka')
                         continue
                     if m2ts_type == 'subtitle_only':
                         if len(sel_sub) <= 0:
-                            out_item.setText('')
+                            _set_sp_out('')
                             continue
                         if len(sel_sub) == 1:
                             ext = 'sup'

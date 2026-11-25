@@ -17,6 +17,7 @@ from src.core.i18n import translate_text
 from src.core.tool_paths import ENCODER_PATH_NAMES, require_tool_path, tool_path
 from src.core.video_format import cpu_chroma_formats, yuv_format_matches
 from src.exports.utils import run_command
+from src.runtime.encode_source import verify_encoded_dimensions
 
 
 _OUTPUT_CODECS = {'x264': 'h264', 'x265': 'hevc', 'svtav1': 'av1'}
@@ -130,11 +131,14 @@ class CpuEncodeCommand:
                 command.append(argument)
         return command
 
-    def verify_output(self, path: str, bit_depth: str, chroma_format: str = 'yuv420') -> None:
+    def verify_output(
+            self, path: str, bit_depth: str, chroma_format: str = 'yuv420',
+            *, expected_size: tuple[int, int] | None = None,
+    ) -> None:
         """Check the video stream and container before using it as track zero."""
         result = run_command(
             [tool_path('FFPROBE_PATH'), '-v', 'error', '-show_entries',
-             'format=format_name:stream=codec_type,codec_name,pix_fmt', '-of', 'json', path],
+             'format=format_name:stream=codec_type,codec_name,pix_fmt,width,height', '-of', 'json', path],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, check=True,
         )
         payload = json.loads(result.stdout)
@@ -149,6 +153,7 @@ class CpuEncodeCommand:
             raise RuntimeError(translate_text(
                 'The encoder command must output one {codec} video at {depth}-bit {chroma} in {format} format. Check {path}.'
             ).format(codec=codec, depth=bit_depth, chroma=chroma_format, format=self.output_extension[1:], path=path))
+        verify_encoded_dimensions(path, stream, expected_size)
 
 
 def default_cpu_encode_command(

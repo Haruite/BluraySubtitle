@@ -256,6 +256,7 @@ class EncodeDeviceControls(QWidget):
         layout.setSpacing(8)
         self.cpu_box = _DeviceBox(cpu_device_name(), 'Encoder tool:', self.t, self, manage_presets=manage_presets)
         self.cpu_checkbox = self.cpu_box.checkbox
+        self.cpu_checkbox.setObjectName('cpuEncodeDevice')
         self.cpu_checkbox.setChecked(True)
         layout.addWidget(self.cpu_box)
         self.gpu_controls = QWidget(self)

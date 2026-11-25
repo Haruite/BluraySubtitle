@@ -4,22 +4,51 @@ import os
 import re
 import sys
 import tempfile
+from contextlib import suppress
+from contextvars import copy_context
 from pathlib import Path
+from threading import Event
 from typing import Optional
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment
+from PyQt6.QtCore import QProcess, QProcessEnvironment, QThread
 from PyQt6.QtWidgets import QWidget, QComboBox, QHBoxLayout, QLineEdit, QPushButton, QTableWidget
 
 from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, ENCODE_REMUX_SP_LABELS
 from src.core.tool_paths import bundle_directory, is_bundled_tool, require_tool_path, tool_path
+from src.core.video_format import OutputResolution
 from src.exports.utils import print_exc_terminal, system_tool_environment
+from src.runtime import TaskCancelled
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
+from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
+from src.runtime.video_crop import VideoCropPlan, detect_black_borders, write_vapoursynth_crop
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
 )
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox
 from src.runtime.vpy_output import remove_vpy_output_format, vpy_with_output_format
 from .gui_base import BluraySubtitleGuiBase
+
+
+class _PreviewCropThread(QThread):
+    def __init__(self, source: str, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.source = source
+        self.context = copy_context()
+        self.cancel = Event()
+        self.plan: VideoCropPlan | None = None
+        self.error: Exception | None = None
+
+    def requestInterruption(self) -> None:
+        self.cancel.set()
+        super().requestInterruption()
+
+    def run(self) -> None:
+        try:
+            self.plan = self.context.run(detect_black_borders, self.source, cancel_event=self.cancel)
+        except TaskCancelled:
+            pass
+        except Exception as error:
+            self.error = error
 
 
 _PREVIOUS_GETNATIVE_KERNEL_HELPER = (
@@ -884,6 +913,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     def _update_vpy_paths_in_file(
             self, vpy_path: str, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str,
+            resolution: OutputResolution = OutputResolution(),
     ) -> bool:
         """Update a=/sub_file=/TextSub toggle in target vpy file for preview context."""
         vpy_path = os.path.normpath(str(vpy_path or '').strip())
@@ -891,8 +921,8 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             raise FileNotFoundError(vpy_path)
 
         with open(vpy_path, 'r', encoding='utf-8') as fp:
-            lines = fp.readlines()
-        original = ''.join(lines)
+            original = fp.read()
+        lines = remove_vpy_output_format(original).splitlines(keepends=True)
 
         def norm(s: str) -> str:
             return s.rstrip('\r\n')
@@ -950,7 +980,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     changed = True
                 continue
 
-        output = vpy_with_output_format(''.join(lines), bit_depth, chroma_format)
+        output = vpy_with_output_format(''.join(lines), bit_depth, chroma_format, resolution)
         if changed or output != original:
             with open(vpy_path, 'w', encoding='utf-8') as fp:
                 fp.write(output)
@@ -959,6 +989,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     def _create_temp_preview_vpy_from_default(
             self, video_path: str, subtitle_path: str, *, bit_depth: str, chroma_format: str,
+            resolution: OutputResolution = OutputResolution(),
     ) -> str:
         self.ensure_default_vpy_file()
         default_vpy = self.get_default_vpy_path()
@@ -968,7 +999,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             bits = int(bit_depth)
             processing_values = self._current_vpy_processing_values()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
-                lines = fp.readlines()
+                lines = remove_vpy_output_format(fp.read()).splitlines(keepends=True)
 
             out: list[str] = []
             for line in lines:
@@ -1005,7 +1036,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
             os.close(fd)
             with open(temp_vpy, 'w', encoding='utf-8') as fp:
-                fp.write(vpy_with_output_format(''.join(out), bit_depth, chroma_format))
+                fp.write(vpy_with_output_format(''.join(out), bit_depth, chroma_format, resolution))
             return temp_vpy
         except Exception:
             print_exc_terminal()
@@ -1087,6 +1118,75 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         except Exception:
             print_exc_terminal()
 
+    def _launch_encode_preview(
+            self, preview_path: str, video_path: str, *, temporary: bool,
+            merge_default: bool, analyze_crop: bool,
+    ) -> None:
+        def discard():
+            if temporary:
+                with suppress(OSError):
+                    os.remove(preview_path)
+
+        def launch():
+            process = self.open_vpy_in_vsedit(preview_path)
+            if process is None:
+                discard()
+                return
+            if not temporary:
+                return
+            finished = False
+
+            def finish(*_):
+                nonlocal finished
+                if finished:
+                    return
+                finished = True
+                try:
+                    if merge_default and os.path.isfile(preview_path):
+                        if analyze_crop:
+                            write_vapoursynth_crop(preview_path, None)
+                        self._merge_temp_edit_back_to_default_vpy(preview_path)
+                        self._normalize_default_vpy_runtime_lines()
+                except Exception:
+                    print_exc_terminal()
+                finally:
+                    discard()
+                    process.deleteLater()
+
+            process.finished.connect(finish)
+            process.errorOccurred.connect(finish)
+
+        if not analyze_crop:
+            launch()
+            return
+
+        dialog = ScanProgressDialog(self, self.t('Analyzing black borders: {name}').format(
+            name=os.path.basename(video_path),
+        ), self.t('Cancel'))
+        self._apply_window_opacity(dialog)
+        worker = _PreviewCropThread(video_path, self)
+        dialog.cancel_requested.connect(worker.requestInterruption)
+
+        def crop_ready():
+            dialog.finish()
+            worker.deleteLater()
+            if worker.cancel.is_set() or self._close_pending:
+                discard()
+                return
+            try:
+                if worker.error is not None:
+                    raise worker.error
+                write_vapoursynth_crop(preview_path, worker.plan)
+                launch()
+            except Exception as error:
+                discard()
+                AnimatedMessageBox.warning(
+                    self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=error),
+                )
+
+        worker.finished.connect(crop_ready)
+        worker.start()
+
     def _preview_script_for_row(
             self, vpy_path: str, video_path: str, subtitle_path: str, *, table: QTableWidget, row: int,
     ):
@@ -1113,58 +1213,58 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         default_vpy = self.get_default_vpy_path()
         if not vpy_path:
             vpy_path = default_vpy
-
+        preview_path = vpy_path
+        temporary = False
         try:
-            try:
-                is_default = os.path.normcase(os.path.abspath(os.path.normpath(vpy_path))) == os.path.normcase(
-                    os.path.abspath(os.path.normpath(default_vpy)))
-            except Exception:
-                is_default = False
+            resolution = self._encode_row_resolution(table, row) or self.encode_resolution_row.selected_resolution()
+            analyze_crop = resolution.enabled and self.auto_crop_black_borders_checkbox.isChecked()
+            is_default = os.path.normcase(os.path.abspath(vpy_path)) == os.path.normcase(os.path.abspath(default_vpy))
             if is_default:
-                self.ensure_default_vpy_file()
-                temp_vpy = self._create_temp_preview_vpy_from_default(
+                preview_path = self._create_temp_preview_vpy_from_default(
                     video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                    resolution=resolution,
                 )
-                if not temp_vpy:
+                if not preview_path:
                     AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
                     return
-                proc = self.open_vpy_in_vsedit(temp_vpy)
-                if not proc:
-                    try:
-                        os.remove(temp_vpy)
-                    except Exception:
-                        pass
-                    return
-                if not hasattr(self, '_vsedit_preview_sessions'):
-                    self._vsedit_preview_sessions = {}
-                self._vsedit_preview_sessions[proc] = temp_vpy
-
-                def sync_and_cleanup(*_):
-                    try:
-                        sess_temp = self._vsedit_preview_sessions.pop(proc, '')
-                    except Exception:
-                        sess_temp = ''
-                    if sess_temp:
-                        self._merge_temp_edit_back_to_default_vpy(sess_temp)
-                        self._normalize_default_vpy_runtime_lines()
-                        try:
-                            os.remove(sess_temp)
-                        except Exception:
-                            pass
-                    try:
-                        proc.deleteLater()
-                    except Exception:
-                        pass
-
-                proc.finished.connect(sync_and_cleanup)
-                proc.errorOccurred.connect(sync_and_cleanup)
+                temporary = True
             else:
+                if analyze_crop:
+                    original = Path(vpy_path).resolve()
+                    script = original.read_bytes()
+                    descriptor, preview_path = tempfile.mkstemp(prefix='.preview-', suffix='.vpy', dir=original.parent)
+                    temporary = True
+                    with os.fdopen(descriptor, 'wb') as snapshot:
+                        snapshot.write(script)
                 self._update_vpy_paths_in_file(
-                    vpy_path, video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                    preview_path, video_path, subtitle_path or '', bit_depth=bit_depth, chroma_format=chroma_format,
+                    resolution=resolution,
                 )
-                self.open_vpy_in_vsedit(vpy_path)
+            self._launch_encode_preview(
+                preview_path, video_path, temporary=temporary, merge_default=is_default, analyze_crop=analyze_crop,
+            )
         except Exception as e:
+            if temporary:
+                with suppress(OSError):
+                    os.remove(preview_path)
             AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=e))
+
+    def _encode_row_video_path(self, table: QTableWidget, row: int, *, choose_clip: bool = False) -> str:
+        labels = table.property('columnKeys') or ()
+        if 'vpy_path' not in labels:
+            return ''
+        if 'bdmv_index' not in labels:
+            return (self._get_remux_source_path_from_table3_row(row) if table is self.table3
+                    else self._get_remux_source_path_from_table2_row(row))
+        disc = table.item(row, labels.index('bdmv_index'))
+        clips = table.item(row, labels.index('m2ts_file'))
+        if disc is None or clips is None:
+            return ''
+        try:
+            bdmv_index = int(disc.text())
+        except ValueError:
+            return ''
+        return self._select_video_path(bdmv_index, self._split_m2ts_files(clips.text()), choose_clip=choose_clip)
 
     def on_edit_vpy_clicked(self):
         if self.get_selected_function_id() != 4:
@@ -1197,50 +1297,13 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if row_index < 0:
             return
 
-        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            video_path = self._get_remux_source_path_from_table2_row(row_index)
-            should_load_subtitle = False
-            try:
-                should_load_subtitle = bool(
-                    getattr(self, 'sub_pack_hard_radio', None) and self.sub_pack_hard_radio.isChecked())
-            except Exception:
-                should_load_subtitle = False
-            subtitle_path = ''
-            try:
-                sub_col = ENCODE_REMUX_LABELS.index('sub_path')
-                sub_item = self.table2.item(row_index, sub_col)
-                subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
-            except Exception:
-                subtitle_path = ''
-            vpy_path = self.get_vpy_path_from_row(row_index)
-            self._preview_script_for_row(vpy_path, video_path, subtitle_path, table=self.table2, row=row_index)
-            return
-
-        try:
-            bdmv_col = ENCODE_LABELS.index('bdmv_index')
-            m2ts_col = ENCODE_LABELS.index('m2ts_file')
-        except Exception:
-            bdmv_col, m2ts_col = 2, 4
-
-        bdmv_item = self.table2.item(row_index, bdmv_col)
-        m2ts_item = self.table2.item(row_index, m2ts_col)
-        sub_item = self.table2.item(row_index, 0)
-
-        try:
-            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else -1
-        except Exception:
-            bdmv_index = -1
-
-        m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
-        video_path = self._select_video_path(bdmv_index, m2ts_files)
-        should_load_subtitle = False
-        try:
-            should_load_subtitle = bool(
-                getattr(self, 'sub_pack_hard_radio', None) and self.sub_pack_hard_radio.isChecked())
-        except Exception:
-            should_load_subtitle = False
-        subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
-
+        video_path = self._encode_row_video_path(self.table2, row_index, choose_clip=True)
+        labels = self.table2.property('columnKeys') or ()
+        subtitle_path = ''
+        if self.sub_pack_hard_radio.isChecked() and 'sub_path' in labels:
+            item = self.table2.item(row_index, labels.index('sub_path'))
+            if item is not None:
+                subtitle_path = item.text().strip()
         vpy_path = self.get_vpy_path_from_row(row_index)
         self._preview_script_for_row(vpy_path, video_path, subtitle_path, table=self.table2, row=row_index)
 
@@ -1288,28 +1351,6 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if row_index < 0:
             return
 
-        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            video_path = self._get_remux_source_path_from_table3_row(row_index)
-            vpy_path = self.get_sp_vpy_path_from_row(row_index)
-            self._preview_script_for_row(vpy_path, video_path, '', table=self.table3, row=row_index)
-            return
-
-        try:
-            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
-            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
-        except Exception:
-            bdmv_col, m2ts_col = 0, 2
-
-        bdmv_item = self.table3.item(row_index, bdmv_col)
-        m2ts_item = self.table3.item(row_index, m2ts_col)
-        try:
-            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else -1
-        except Exception:
-            bdmv_index = -1
-
-        m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
-        video_path = self._select_video_path(bdmv_index, m2ts_files)
-        subtitle_path = ''
-
+        video_path = self._encode_row_video_path(self.table3, row_index, choose_clip=True)
         vpy_path = self.get_sp_vpy_path_from_row(row_index)
-        self._preview_script_for_row(vpy_path, video_path, subtitle_path, table=self.table3, row=row_index)
+        self._preview_script_for_row(vpy_path, video_path, '', table=self.table3, row=row_index)

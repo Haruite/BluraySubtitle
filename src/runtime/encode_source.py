@@ -10,11 +10,13 @@ import tempfile
 from dataclasses import dataclass, field
 from decimal import Decimal, localcontext
 from fractions import Fraction
+from threading import Event
 from typing import Sequence
 
 from src.core.i18n import translate_text
 from src.core.tool_paths import require_tool_path, tool_path
 from src.exports.utils import run_command, run_vspipe
+from src.runtime.vpy_output import VpyOutputGeometry
 
 
 _X265_DYNAMIC_METADATA_OPTIONS = (
@@ -34,6 +36,7 @@ class ActualEncodeSource:
     stream_index: int
     codec_name: str
     stream: dict[str, object] = field(repr=False, compare=False)
+    geometry: VpyOutputGeometry | None = None
 
 
 @dataclass(frozen=True)
@@ -186,7 +189,7 @@ source_path = os.environ['BLURAYSUB_VPY_PROBE_SCRIPT']
 source_dir = os.path.dirname(source_path)
 os.chdir(source_dir)
 sys.path.insert(0, source_dir)
-runpy.run_path(source_path, run_name='__vapoursynth__')
+namespace = runpy.run_path(source_path, run_name='__vapoursynth__')
 output = vs.get_output(0)
 clip = getattr(output, 'clip', output)
 source_output = vs.get_outputs().get(1)
@@ -210,6 +213,8 @@ with open(os.environ['BLURAYSUB_VPY_PROBE_RESULT'], 'w', encoding='utf-8') as ou
         'timeline': [clip.num_frames, clip.fps_num, clip.fps_den],
         'source_frame_count': getattr(source_clip, 'num_frames', None),
         'samples': samples,
+        'size': [clip.width, clip.height],
+        'resize_input_size': namespace.get('_bluraysub_resize_input_size'),
     }, output)
 """
 
@@ -514,6 +519,36 @@ def build_automatic_encoder_metadata_arguments(
     return tuple(arguments)
 
 
+def probe_video_geometry(
+        source_path: str, *, cancel_event: Event | None = None, timeout: float | None = None,
+) -> tuple[int, int, Fraction]:
+    """Return the first video stream's pixel dimensions and display aspect ratio."""
+    executable = require_tool_path('FFPROBE_PATH')
+    result = run_command(
+        [executable, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+         'stream=width,height,sample_aspect_ratio', '-of', 'json', source_path],
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        cancel_event=cancel_event, timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or '').strip() or translate_text('FFprobe exited with code {code}').format(
+            code=result.returncode,
+        ))
+    try:
+        stream = json.loads(result.stdout)['streams'][0]
+        width, height = int(stream['width']), int(stream['height'])
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(translate_text('FFprobe returned invalid video dimensions.')) from error
+    if min(width, height) <= 0:
+        raise RuntimeError(translate_text('FFprobe returned invalid video dimensions.'))
+
+    try:
+        sar = Fraction(str(stream.get('sample_aspect_ratio', '')).replace(':', '/'))
+    except (ValueError, ZeroDivisionError):
+        sar = Fraction(1)
+    return width, height, Fraction(width, height) * (sar if sar > 0 else 1)
+
+
 def probe_actual_encode_source(source_path: str) -> ActualEncodeSource:
     """Probe the first video stream from the resolved per-row Encode source."""
     normalized_path = os.path.abspath(os.path.normpath(str(source_path or '').strip()))
@@ -663,6 +698,20 @@ def probe_vapoursynth_output_metadata(
     source_frame_count = document.get('source_frame_count')
     if not isinstance(source_frame_count, int) or source_frame_count <= 0:
         source_frame_count = None
+
+    def dimensions(values: object) -> tuple[int, int] | None:
+        if isinstance(values, (list, tuple)) and len(values) == 2 and all(type(n) is int and n > 0 for n in values):
+            return values[0], values[1]
+        return None
+
+    size = dimensions(document.get('size'))
+    geometry = None
+    if size is not None:
+        geometry = VpyOutputGeometry(
+            dimensions((source.stream.get('width'), source.stream.get('height'))),
+            dimensions(document.get('resize_input_size')),
+            size,
+        )
     properties = dict(samples[0])
     if any(sample != properties for sample in samples[1:]):
         raise VapourSynthOutputMetadataMismatch(
@@ -707,6 +756,7 @@ def probe_vapoursynth_output_metadata(
             source.stream_index,
             source.codec_name,
             stream,
+            geometry,
         ),
         color_changed,
         output_timeline,
@@ -835,6 +885,8 @@ def extract_hdr10plus_metadata(
         source: ActualEncodeSource,
         output_path: str,
         vpy_timeline: tuple[int, int, int] | None,
+        *,
+        require_full_frame: bool = False,
 ) -> str:
     """Extract validated HDR10+ JSON and require matching VPy frames."""
     executable = require_tool_path("HDR10PLUS_TOOL_PATH")
@@ -884,6 +936,10 @@ def extract_hdr10plus_metadata(
                 path=metadata_path
             )
         )
+    if require_full_frame and any(
+            not isinstance(scene, dict) or scene.get('NumberOfWindows') != 1 for scene in scene_info
+    ):
+        raise RuntimeError(translate_text('HDR10+ processing windows cannot be verified for the resized picture.'))
 
     if vpy_timeline is None:
         raise RuntimeError(
@@ -921,6 +977,15 @@ def verify_hdr10plus_metadata(encoded_path: str) -> None:
                 'hdr10plus_tool did not find HDR10+ metadata in the encoded output'
             )
         )
+
+
+def verify_encoded_dimensions(path: str, stream: dict, expected: tuple[int, int] | None) -> None:
+    actual = stream.get('width'), stream.get('height')
+    if expected is not None and actual != expected:
+        display_size = f'{actual[0]}×{actual[1]}' if all(actual) else translate_text('unknown')
+        raise RuntimeError(translate_text(
+            'Encoded video resolution mismatch: expected {expected}, got {actual}. Check {path}.'
+        ).format(expected=f'{expected[0]}×{expected[1]}', actual=display_size, path=path))
 
 
 def verify_final_video_metadata(

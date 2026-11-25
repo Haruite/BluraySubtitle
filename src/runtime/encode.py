@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 
 from src.core.i18n import translate_text
 from src.core.tool_paths import ENCODER_PATH_NAMES, require_tool_path, tool_path
-from src.core.video_format import CHROMA_FORMATS
+from src.core.video_format import CHROMA_FORMATS, OutputResolution
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
     validate_audio_cleanup_tools,
@@ -44,6 +44,7 @@ class EncodeSettings:
     # Skip resolving an unused CPU command for GPU-only jobs or completed outputs.
     cpu_command: CpuEncodeCommand | str | None = None
     chroma_format: str = 'yuv420'
+    output_resolution: OutputResolution = OutputResolution()
 
     def cpu_encode_choice(self) -> VideoEncodeChoice:
         return VideoEncodeChoice(self.encoder, self.bit_depth, self.encoder_parameters, chroma_format=self.chroma_format)
@@ -75,6 +76,7 @@ class EncodeRow:
     audio_codec_choices: tuple[str, ...] = ()
     track_language_overrides: tuple[tuple[str, str], ...] = ()
     video_encode: VideoEncodeChoice | None = None
+    output_resolution: OutputResolution | None = None
 
 
 @dataclass(frozen=True)
@@ -447,6 +449,8 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     ]
     if pending_video_rows:
         require_tool_path("VSPIPE_PATH")
+        if any((row.output_resolution or request.settings.output_resolution).enabled for row, _ in pending_video_rows):
+            require_tool_path("FFPROBE_PATH")
         if tool_path("PLUGIN_PATH"):
             require_tool_path("PLUGIN_PATH")
         choices = {row.video_encode or request.settings.cpu_encode_choice() for row, _ in pending_video_rows}

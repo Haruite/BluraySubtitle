@@ -89,14 +89,14 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                 return os.path.normpath(root)
         return ''
 
-    def _select_video_path(self, bdmv_index: int, m2ts_files: list[str]) -> str:
+    def _select_video_path(self, bdmv_index: int, m2ts_files: list[str], *, choose_clip: bool = True) -> str:
         if not m2ts_files:
             return ''
         stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
         if not stream_dir:
             return ''
 
-        if len(m2ts_files) == 1:
+        if len(m2ts_files) == 1 or not choose_clip:
             return os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
 
         item, ok = AnimatedInputDialog.getItem(
