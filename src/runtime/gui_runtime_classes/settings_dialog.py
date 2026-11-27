@@ -90,7 +90,7 @@ from .encode_preset_editor import validate_custom_preset_names
 from .file_dialog import choose_path
 from .spin_box import StyledDoubleSpinBox, StyledSpinBox
 from .widget_animations import (
-    AnimatedDialog, AnimatedMessageBox, supports_window_opacity, window_is_fading_out, window_opacity,
+    AnimatedDialog, AnimatedMessageBox, set_window_opacity, supports_window_opacity, window_is_fading_out, window_opacity,
 )
 
 
@@ -276,7 +276,7 @@ class SettingsDialog(AnimatedDialog):
         form.addRow(opacity_label, self.opacity_spin)
         if not supports_window_opacity():
             self.opacity_spin.setEnabled(False)
-            help_text = self.t("Window opacity requires macOS, Windows or a composited X11 session.")
+            help_text = self.t("Window opacity requires macOS, Windows, Wayland or a composited X11 session.")
             self.opacity_spin.setToolTip(help_text)
             opacity_label.setToolTip(help_text)
 
@@ -305,6 +305,8 @@ class SettingsDialog(AnimatedDialog):
         form.addRow(self.close_to_tray_checkbox)
         self.save_log_checkbox = QCheckBox(self.t("Save log to file"), tab)
         form.addRow(self.save_log_checkbox)
+        self.suppress_mpv_output_checkbox = QCheckBox(self.t("Suppress mpv playback output"), tab)
+        form.addRow(self.suppress_mpv_output_checkbox)
         self.log_line_limit_spin = StyledSpinBox(tab)
         self.log_line_limit_spin.setRange(1, MAX_LOG_LINE_LIMIT)
         form.addRow(self.t("Log line limit"), self.log_line_limit_spin)
@@ -541,7 +543,7 @@ class SettingsDialog(AnimatedDialog):
         message_box.setOption(QMessageBox.Option.DontUseNativeDialog)
         opacity = window_opacity(self)
         if opacity < 1.0:
-            message_box.setWindowOpacity(opacity)
+            set_window_opacity(message_box, opacity)
         message_box.setWindowTitle(self.t("Check for updates"))
         message_box.setIcon(QMessageBox.Icon.Information)
         message_box.setTextFormat(Qt.TextFormat.RichText)
@@ -1171,6 +1173,7 @@ class SettingsDialog(AnimatedDialog):
         self.close_to_tray_checkbox.setChecked(config.ui.close_to_tray)
         self.startup_update_checkbox.setChecked(config.ui.check_updates_on_startup)
         self.save_log_checkbox.setChecked(config.ui.save_log_to_file)
+        self.suppress_mpv_output_checkbox.setChecked(config.ui.suppress_mpv_output)
         self.log_line_limit_spin.setValue(config.ui.log_line_limit)
         self._set_combo_data(self.log_theme_combo, config.ui.log_theme)
         self.remux_output_edit.setText(config.paths.remux_output)
@@ -1277,6 +1280,7 @@ class SettingsDialog(AnimatedDialog):
                 scale_percent=int(self.ui_scale_combo.currentData()),
                 opacity=self.opacity_spin.value(),
                 save_log_to_file=self.save_log_checkbox.isChecked(),
+                suppress_mpv_output=self.suppress_mpv_output_checkbox.isChecked(),
                 log_line_limit=self.log_line_limit_spin.value(),
                 log_theme=str(self.log_theme_combo.currentData()),
                 close_to_tray=self.close_to_tray_checkbox.isChecked(),

@@ -40,7 +40,7 @@ from src.runtime.gui_runtime_classes.startup_update_notice import StartupUpdateN
 from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox, animate_window_close, cancel_window_close
 from src.runtime.gui_runtime_classes.window_background import WindowBackground
-from src.runtime.gui_runtime_classes.window_caption import prepare_window_caption
+from src.runtime.gui_runtime_classes.window_caption import prepare_window_surface
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -72,7 +72,7 @@ class _ToolbarPreferencesScroll(QScrollArea):
 class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
     def __init__(self, application_log: ApplicationLog | None = None):
         super().__init__()
-        prepare_window_caption(self)
+        prepare_window_surface(self)
         self.setObjectName('mainWindow')
         self._application_log = application_log
         self._log_dialog = None

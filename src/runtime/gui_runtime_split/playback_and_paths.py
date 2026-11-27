@@ -181,7 +181,11 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
         process = QProcess(self)
         process.setProcessEnvironment(environment)
-        process.setProcessChannelMode(QProcess.ProcessChannelMode.ForwardedChannels)
+        if self._app_config.ui.suppress_mpv_output and not iina:
+            process.setStandardOutputFile(QProcess.nullDevice())
+            process.setStandardErrorFile(QProcess.nullDevice())
+        else:
+            process.setProcessChannelMode(QProcess.ProcessChannelMode.ForwardedChannels)
         process.setStandardInputFile(QProcess.nullDevice())
         if menu_directory is not None:
             process.destroyed.connect(lambda *_: menu_directory.cleanup())

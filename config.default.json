@@ -11,6 +11,7 @@
     "scale_percent": 0,
     "opacity": 100,
     "save_log_to_file": false,
+    "suppress_mpv_output": true,
     "log_line_limit": 4000,
     "log_theme": "follow",
     "close_to_tray": true,

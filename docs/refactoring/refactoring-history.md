@@ -1499,3 +1499,11 @@ Windows tests covered Blu-ray and Remux input, mixed CPU and GPU rows, verified 
 
 A default-off Encode setting applies the same BT.709 tone mapping in preview and encoding. Dolby Vision on UHD Blu-ray uses the Profile 7 base layer. Remux input with Profile 5 uses the decoder's RPU to reconstruct colors. The SDR path verifies color signaling before muxing.
 Windows x264, x265, and NVENC checks covered HDR10, HDR10+, HLG, and Dolby Vision profiles 5, 7, 8.1, and 8.4, including FEL RPU and VFR timestamps. The default HDR path was checked with a source carrying both Dolby Vision and HDR10+.
+
+## Blu-ray table loading responsiveness
+
+2026-11-27 · Based on `bb44a6a`
+
+The disc scanner retains the first PTS and duration of each referenced M2TS stream alongside the parsed chapters. The main output table reuses those readings for chapter-bounded ranges and derives the displayed clip names from the same range calculation. Episode rows, derived timing and remux commands use the existing cancellable GUI update queue before the SP scan starts.
+
+Four-volume Remux checks in WSL compared the contents of 24 main rows and 64 SP rows with the previous output and exercised cancellation and source replacement during table updates. The timing and scan regression tests passed.

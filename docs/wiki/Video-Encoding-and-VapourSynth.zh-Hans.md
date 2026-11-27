@@ -22,7 +22,7 @@
 
 **启用 GPU 设备压制**默认关闭。在**设置 → 高级 → 视频压制设备设置**开启后，压制区显示 GPU 设置，正片和 SP 表格显示**视频压制设备**列。每个设备有独立的编码工具或格式、位深、预设和色度采样。
 
-**检测 GPU**查询可用的编码格式、位深和驱动能力。**复制报告**可获取驱动结果和查询命令。选中 GPU 并设置压制参数后，FFmpeg 会针对当前组合试压。**色度采样**下拉框显示 FFprobe 在试压成品中确认的格式。源码运行时，环境配置脚本会将能力查询工具安装在 FFmpeg 所在目录。
+**检测 GPU**先查询驱动的编码能力。对每张显卡可输出 `yuv420` 的编码格式和位深组合，用默认的**均衡**预设试压一次，只列出通过的组合。**复制报告**可获取驱动结果、试压命令和结果。使用默认参数时，**色度采样**下拉框复用通过验证的 `yuv420`，并根据当前设置验证候选格式。源码运行时，环境配置脚本会将能力查询工具安装在 FFmpeg 所在目录。
 
 | 安装目标 | 硬件编码后端 |
 | --- | --- |
@@ -36,7 +36,7 @@ GPU 出现在界面上需要所配置的 FFmpeg 包含对应硬件后端，且�
 
 Vulkan 使用 GPU 计算着色器压制 FFV1，需要支持 Vulkan 1.3 的 GPU 驱动和编入 `ffv1_vulkan` 的 FFmpeg。8 位、10 位和 12 位均可在试压通过后选择 `yuv420`、`yuv422` 或 `yuv444`。程序将无损 FFV1 v4 视频混流到最终 MKV。 [FFV1 格式和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#ffv1) · [FFmpeg Vulkan 计算编码器](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
 
-在 macOS 上，VideoToolbox 的 ProRes 预设决定采样格式。驱动可提供 10 位 ProRes 422 和 12 位 ProRes 4444 的各档规格。 [ProRes 规格和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#apple-prores) · [Apple VideoToolbox 编码能力查询](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
+在 macOS 上，GPU 检测列出 VideoToolbox 报告的 ProRes 规格。预设决定输出为 10 位 ProRes 422 或 12 位 ProRes 4444。 [ProRes 规格和用途](Media-Formats-and-Dolby-Vision.zh-Hans.md#apple-prores) · [Apple VideoToolbox 编码能力查询](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
 
 各设备分别按表格顺序处理分配给自己的条目，并可同时压制。附加到正片的 SP 轨道跟随正片输出。每行的 VPy 在滤镜和硬字幕处理后，将输出 0 转成该行的位深和色度采样。VSEdit 预览沿用该格式。
 

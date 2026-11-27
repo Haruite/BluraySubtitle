@@ -52,14 +52,14 @@ def x11_compositing_active() -> bool:
 
 
 @cache
-def x11_supports_system_move_resize() -> bool:
+def x11_wm_supports(hint: bytes) -> bool:
     connection = _x11_connection()
     if connection is None:
         return False
     x11, display = connection
     supported = x11.XInternAtom(display, b"_NET_SUPPORTED", True)
-    moveresize = x11.XInternAtom(display, b"_NET_WM_MOVERESIZE", True)
-    if not supported or not moveresize:
+    requested = x11.XInternAtom(display, hint, True)
+    if not supported or not requested:
         return False
     atom = x11.XInternAtom(display, b"ATOM", True)
     actual_type, size, length, remaining, data = c_ulong(), c_int(), c_ulong(), c_ulong(), c_void_p()
@@ -67,7 +67,7 @@ def x11_supports_system_move_resize() -> bool:
                                     byref(actual_type), byref(size), byref(length), byref(remaining), byref(data))
     try:
         return (result == 0 and actual_type.value == atom and size.value == 32 and bool(data)
-                and moveresize in cast(data, POINTER(c_ulong))[:length.value])
+                and requested in cast(data, POINTER(c_ulong))[:length.value])
     finally:
         if data:
             x11.XFree(data)

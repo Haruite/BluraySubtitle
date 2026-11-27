@@ -22,7 +22,7 @@ Quality depends on source texture/motion, encoder version, rate control, preset,
 
 **Enable GPU encoding** is off by default. Turn it on in **Settings → Advanced → Video encoding devices** to show GPU settings and the **Video encoding device** column for main and SP videos. Each device groups its codec, bit depth, preset, and chroma sampling together.
 
-**Detect GPUs** queries the available codecs, depths, and driver capabilities. **Copy report** includes the driver results and query commands. After you select a GPU and its encoding parameters, FFmpeg tries the chroma formats for that combination. The **Chroma sampling** list shows the formats that FFprobe confirms in the resulting streams. For a source installation, setup installs the capability query executable alongside FFmpeg.
+**Detect GPUs** queries the driver for encoding capabilities. For each GPU, codec and bit-depth combination that can output `yuv420`, it runs one short encode with the default **Balanced** preset and lists the combinations that pass. **Copy report** includes the driver results, trial commands, and outcomes. **Chroma sampling** reuses the verified `yuv420` result with the default parameters and checks candidate formats for the selected settings. For a source installation, setup installs the capability query executable alongside FFmpeg.
 
 | Setup target | Hardware backends |
 | --- | --- |
@@ -36,7 +36,7 @@ For a GPU to appear, the configured FFmpeg must include its hardware backend and
 
 Vulkan runs FFV1 encoding on the GPU's compute shaders. It requires a Vulkan 1.3 GPU driver and an FFmpeg build with `ffv1_vulkan`. BluraySubtitle can offer `yuv420`, `yuv422`, and `yuv444` at 8, 10, and 12 bits when the modes pass the short encode. The app muxes lossless FFV1 version 4 video into the final MKV. [FFV1 format and uses](Media-Formats-and-Dolby-Vision.md#ffv1) · [FFmpeg Vulkan compute codecs](https://www.khronos.org/blog/video-encoding-and-decoding-with-vulkan-compute-shaders-in-ffmpeg)
 
-On macOS, the VideoToolbox ProRes preset determines sampling. The driver can offer 10-bit ProRes 422 and 12-bit ProRes 4444 profiles. [ProRes profiles and uses](Media-Formats-and-Dolby-Vision.md#apple-prores) · [Apple VideoToolbox encoder capabilities](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
+On macOS, GPU detection lists the ProRes profiles reported by VideoToolbox. The preset determines the output format, either 10-bit ProRes 422 or 12-bit ProRes 4444. [ProRes profiles and uses](Media-Formats-and-Dolby-Vision.md#apple-prores) · [Apple VideoToolbox encoder capabilities](https://developer.apple.com/documentation/videotoolbox/vtcopysupportedpropertydictionaryforencoder(width:height:codectype:encoderspecification:encoderidout:supportedpropertiesout:))
 
 Each device processes its assigned rows in table order, and different devices can run concurrently. SP tracks attached to a main output use that output's encoder. The VPy for each row converts output 0 after filtering and hardsubs to that row's bit depth and chroma sampling. VSEdit preview uses the same format.
 

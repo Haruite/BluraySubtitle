@@ -649,12 +649,24 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             return
         dark = self._theme_mode == 'dark'
         colorful = self._theme_mode == 'colorful'
+        if app.styleSheet():
+            # Replacing an active stylesheet makes Qt revisit descendants for each cached widget.
+            # Clear the large subtree overrides first so Qt can replace the application style in one pass.
+            for widget in (self.content_scroll.widget(), self):
+                if widget.styleSheet():
+                    widget.setStyleSheet('')
+            app.setStyleSheet('')
         # On Qt 6.6 the Fusion style and the explicit palettes below supply the scheme.
         set_scheme = getattr(app.styleHints(), 'setColorScheme', None)
         if set_scheme is not None:
             set_scheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
-        base_style = 'Fusion' if dark or app.platformName() in ('cocoa', 'xcb', 'wayland') else self._default_style_name
-        app.setStyle(_ThemeStyle(base_style, self._theme_mode))
+        base_style = 'fusion' if dark or app.platformName() in ('cocoa', 'xcb', 'wayland') else self._default_style_name
+        style = getattr(self, '_theme_style', None)
+        if style is None or style.baseStyle().name() != base_style:
+            style = self._theme_style = _ThemeStyle(base_style, self._theme_mode)
+            app.setStyle(style)
+        else:
+            style._mode = self._theme_mode
         if dark:
             # Fusion consistently paints the custom dark palette across platforms.
             palette = QPalette(QColor('#2a2a2a'))
@@ -676,7 +688,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             app.setPalette(QPalette() if set_scheme is not None else app.style().standardPalette())
             # Some platform themes keep supplying a dark palette after the light request.
             if app.palette().color(QPalette.ColorRole.Window).lightness() < 128:
-                app.setStyle(_ThemeStyle('Fusion', self._theme_mode))
+                if style.baseStyle().name() != 'fusion':
+                    self._theme_style = _ThemeStyle('fusion', self._theme_mode)
+                    app.setStyle(self._theme_style)
                 app.setPalette(app.style().standardPalette())
             palette = app.palette()
             if colorful:
@@ -792,7 +806,6 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
     def _on_theme_changed(self):
         mode = self.theme_combo.currentData() if hasattr(self, 'theme_combo') else 'light'
         self._apply_theme(str(mode))
-        self._refresh_language_dependent_sizes()
 
     def _translate_widget_texts(self):
         tooltip_catalog = I18N_ZH_TO_EN if self._language_code == 'en' else I18N_EN_TO_ZH

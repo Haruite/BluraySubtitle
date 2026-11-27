@@ -14,6 +14,7 @@ from types import MappingProxyType
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.bdmv import Chapter
+from src.bdmv.m2ts import M2TSTiming
 from src.domain.media.iso_playlists import extract_iso_playlists
 from src.exports.utils import get_folder_size
 from src.runtime import TaskCancelled
@@ -32,6 +33,7 @@ class PlaylistInventory:
     stream_files: tuple[str, ...]
     detail: str
     tracks: list[dict[str, object]]
+    stream_timings: Mapping[str, M2TSTiming | None]
 
 
 @dataclass(frozen=True)
@@ -165,6 +167,8 @@ class DiscScanWorker(QThread):
 
     def _read_playlists(self, chapters: dict[str, Chapter]) -> dict[str, PlaylistInventory]:
         playlists = {}
+        stream_timings: dict[str, M2TSTiming | None] = {}
+        timings_view = MappingProxyType(stream_timings)
         for path, chapter in chapters.items():
             self.check_canceled()
             stream_files = tuple(dict.fromkeys(f'{clip}.m2ts' for clip, _, _ in chapter.in_out_time))
@@ -173,9 +177,10 @@ class DiscScanWorker(QThread):
             if self.function_id in (3, 4, 5):
                 detail = BluraySubtitle.m2ts_file_detail_from_mpls_playlist(
                     path, chapter=chapter, check_canceled=self.check_canceled,
+                    stream_timings=stream_timings,
                 )
                 tracks = BluraySubtitle._mpls_track_streams(path)
-            playlists[path] = PlaylistInventory(path, chapter, stream_files, detail, tracks)
+            playlists[path] = PlaylistInventory(path, chapter, stream_files, detail, tracks, timings_view)
         return playlists
 
     def _read_standalone_streams(

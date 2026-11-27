@@ -11,6 +11,9 @@ from src.core.tool_paths import tool_path
 from src.exports.utils import run_command
 
 
+M2TSTiming = tuple[int | None, int | None]  # First PTS and duration in 90 kHz ticks.
+
+
 class _BitReader:
     """Minimal big-endian bit reader for AVC/HEVC parameter sets."""
 

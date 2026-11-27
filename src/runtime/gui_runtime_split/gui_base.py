@@ -6,11 +6,13 @@ The declarations are verified against the mixins by
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any, Optional
 
 from PyQt6.QtCore import QModelIndex, Qt, QProcess
 from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel, QSystemTrayIcon
 
+from src.bdmv import Chapter
 from src.core.app_config import UiPreferences, WindowPreferences
 from src.core.video_format import OutputResolution
 from src.runtime.hdr_to_sdr import HdrToSdrSource
@@ -239,6 +241,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _append_compat_arg_if_missing(base: str, option_name: str, option_value: str='') -> str:
         raise NotImplementedError
 
+    def _apply_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool=True, *, refresh_main_commands: bool=True) -> Generator[None, None, None]:
+        raise NotImplementedError
+
     def _apply_configuration_after_subtitle_change(self, sub_files: list[str]) -> None:
         raise NotImplementedError
 
@@ -329,10 +334,19 @@ class BluraySubtitleGuiBase(QWidget):
     def _build_main_remux_cmd_template(self, mpls_path: str, bdmv_index: int, root: str, *, name_seq_index: int=0, name_seq_total: int=1) -> str:
         raise NotImplementedError
 
+    def _build_remux_encode_tables_for_mode(self) -> Generator[None, None, None]:
+        raise NotImplementedError
+
     def _build_sp_output_names(self, only_bdmv_index: Optional[int]=None) -> Generator[None, None, None]:
         raise NotImplementedError
 
     def _build_sp_table(self, configuration: dict[int, dict[str, int | str]]) -> Generator[None, None, None]:
+        raise NotImplementedError
+
+    def _build_table1_remux_cmds(self) -> Generator[None, None, None]:
+        raise NotImplementedError
+
+    def _build_table2_m2ts_duration_from_widgets(self, labels: list[str]) -> Generator[None, None, None]:
         raise NotImplementedError
 
     def _cache_available_track_ids(self, key: str, streams: list[dict[str, object]]) -> dict[str, list[str]]:
@@ -967,7 +981,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _table2_labels_for_current_mode(self):
         raise NotImplementedError
 
-    def _table2_m2ts_detail_duration_from_chapter_bounds(self, mpls_selected: str, j1: int, j2: int) -> tuple[str, str, str]:
+    def _table2_m2ts_detail_duration_from_chapter_bounds(self, mpls_selected: str, j1: int, j2: int, *, chapter: Chapter | None=None) -> tuple[str, str, str]:
         raise NotImplementedError
 
     def _table3_get_sp_entry_for_row(self, row: int) -> dict[str, int | str]:

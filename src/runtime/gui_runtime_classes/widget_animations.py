@@ -4,12 +4,12 @@ from collections.abc import Callable
 
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, Qt, QVariantAnimation
-from PyQt6.QtGui import QWindow
+from PyQt6.QtGui import QPainter, QWindow
 from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsOpacityEffect, QInputDialog, QMessageBox, QWidget
 
 from .desktop_appearance import desktop_appearance
 from .x11_window import x11_compositing_active
-from .window_caption import prepare_window_caption
+from .window_caption import prepare_window_surface
 
 
 def enable_combo_animation() -> None:
@@ -17,17 +17,27 @@ def enable_combo_animation() -> None:
         QApplication.setEffectEnabled(Qt.UIEffect.UI_AnimateCombo, True)
 
 
+class _WindowOpacityEffect(QGraphicsOpacityEffect):
+    def draw(self, painter: QPainter) -> None:
+        # Qt can retain opaque child regions in the backing store between repaints.
+        # Clear the damaged pixels before compositing the complete window over them.
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(self.boundingRect(), Qt.GlobalColor.transparent)
+        painter.restore()
+        super().draw(painter)
+
+
 class _WindowFade(QVariantAnimation):
     _opening_fraction = 0.25
 
-    def __init__(self, window: QWidget, handle: QWindow) -> None:
+    def __init__(self, window: QWidget) -> None:
         super().__init__(window)
         self._window = window
         self._effect: QGraphicsOpacityEffect | None = None
-        if _has_translucent_client(window, handle):
-            self._effect = QGraphicsOpacityEffect(window)
+        if _has_translucent_client(window):
+            self._effect = _WindowOpacityEffect(window)
             self._effect.setOpacity(1.0)
-            self._effect.setEnabled(False)
             window.setGraphicsEffect(self._effect)
         self.opacity = self.current_opacity()
         self.close_action: Callable[[], object] | None = None
@@ -61,9 +71,6 @@ class _WindowFade(QVariantAnimation):
     def is_active(self) -> bool:
         return self._waiting_for_expose is not None or self.state() == QAbstractAnimation.State.Running
 
-    def uses_client_opacity(self) -> bool:
-        return self._effect is not None
-
     def current_opacity(self) -> float:
         if self._effect is not None:
             return self._effect.opacity()
@@ -74,7 +81,6 @@ class _WindowFade(QVariantAnimation):
             self._window.setWindowOpacity(opacity)
         else:
             self._effect.setOpacity(opacity)
-            self._effect.setEnabled(opacity < 1.0)
 
     def updateCurrentValue(self, value: float) -> None:
         if self.state() == QAbstractAnimation.State.Running:
@@ -139,14 +145,23 @@ def _window_fade(window: QWidget) -> _WindowFade | None:
 
 def supports_window_opacity() -> bool:
     platform = QApplication.platformName()
-    return platform in ("windows", "cocoa") or (platform == "xcb" and x11_compositing_active())
+    return platform in ("windows", "cocoa") or platform.startswith("wayland") or (
+        platform == "xcb" and x11_compositing_active()
+    )
 
 
-def _has_translucent_client(window: QWidget, handle: QWindow) -> bool:
-    return window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) and handle.format().hasAlpha()
+def _has_translucent_client(window: QWidget) -> bool:
+    if not window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground):
+        return False
+    platform = QApplication.platformName()
+    handle = window.windowHandle()
+    if platform.startswith("wayland"):
+        # Qt 6.6's raster popups report an unspecified format even with an ARGB buffer.
+        return handle is None or handle.requestedFormat().hasAlpha()
+    return platform == "xcb" and (handle is None or handle.format().hasAlpha())
 
 
-def _supports_window_fade(window: QWidget, handle: QWindow) -> bool:
+def _supports_window_fade(window: QWidget) -> bool:
     app = QApplication.instance()
     if (
         app.isSavingSession()
@@ -157,7 +172,7 @@ def _supports_window_fade(window: QWidget, handle: QWindow) -> bool:
         return False
     platform = app.platformName()
     opacity_supported = (
-        _has_translucent_client(window, handle) if platform.startswith("wayland") else supports_window_opacity()
+        _has_translucent_client(window) if platform.startswith("wayland") else supports_window_opacity()
     )
     if not opacity_supported:
         return False
@@ -175,8 +190,8 @@ def _supports_window_fade(window: QWidget, handle: QWindow) -> bool:
 
 def animate_window_open(window: QWidget) -> None:
     handle = window.windowHandle()
-    if handle is not None and _supports_window_fade(window, handle):
-        (_window_fade(window) or _WindowFade(window, handle)).prepare_opening(handle)
+    if handle is not None and _supports_window_fade(window):
+        (_window_fade(window) or _WindowFade(window)).prepare_opening(handle)
 
 
 def animate_window_close(window: QWidget, close: Callable[[], object]) -> bool:
@@ -187,10 +202,10 @@ def animate_window_close(window: QWidget, close: Callable[[], object]) -> bool:
     handle = window.windowHandle()
     if (
         not window.isVisible() or handle is None or not handle.isExposed()
-        or not _supports_window_fade(window, handle)
+        or not _supports_window_fade(window)
     ):
         return False
-    fade = fade or _WindowFade(window, handle)
+    fade = fade or _WindowFade(window)
     if fade.current_opacity() <= 0.0:
         return False
     fade.start_closing(close)
@@ -210,29 +225,23 @@ def cancel_window_close(window: QWidget) -> None:
 
 def set_window_opacity(window: QWidget, opacity: float) -> None:
     fade = _window_fade(window)
-    if fade is None or fade.uses_client_opacity():
-        window.setWindowOpacity(opacity)
-    else:
+    if fade is None and opacity < 1.0 and _has_translucent_client(window):
+        fade = _WindowFade(window)
+    if fade is not None:
         fade.set_resting_opacity(opacity)
+    elif opacity != window.windowOpacity():
+        window.setWindowOpacity(opacity)
 
 
 def window_opacity(window: QWidget) -> float:
     fade = _window_fade(window)
-    if fade is not None and not fade.uses_client_opacity() and fade.is_active():
-        return fade.opacity
-    return window.windowOpacity()
+    return fade.opacity if fade is not None else window.windowOpacity()
 
 
 class DialogFade:
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        prepare_window_caption(self)
-        platform = QApplication.platformName()
-        if platform.startswith("wayland") or (platform == "xcb" and x11_compositing_active()):
-            # Request an alpha buffer before the native window is created, then fade the client area.
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-            self.setAutoFillBackground(True)
+        prepare_window_surface(self)
 
     def done(self, result: int) -> None:
         complete = super().done

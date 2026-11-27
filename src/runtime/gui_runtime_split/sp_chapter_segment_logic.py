@@ -21,7 +21,7 @@ from src.runtime.services import BluraySubtitle
 from src.runtime.gui_runtime_classes.custom_table_widget import StyledComboBox
 from src.runtime.gui_runtime_classes.disc_scan_worker import SP_ORPHAN_M2TS_SKIP_DURATION_BYTES
 from src.runtime.gui_runtime_classes.sp_table_items import SpOutputNameItem, SpSelectionItem
-from src.runtime.sp import SpEntry, media_track_key
+from src.runtime.sp import SpEntry, media_track_key, parse_m2ts_file_detail_segments
 from src.runtime.services_split.misc_workflows import (
     _movie_main_duration_by_bdmv_from_mpls_paths,
     _movie_sp_duration_matches_main,
@@ -324,7 +324,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.table3_section.setVisible(True)
 
     def _table2_m2ts_detail_duration_from_chapter_bounds(
-        self, mpls_selected: str, j1: int, j2: int,
+            self, mpls_selected: str, j1: int, j2: int, *, chapter: Chapter | None = None,
     ) -> tuple[str, str, str]:
         """``(m2ts_file, m2ts_file_detail, ep_duration)`` for mark bounds ``[j1, j2)`` on playlist timeline.
 
@@ -337,36 +337,33 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             return '', '', '00:00:00.000'
         mpl_full = stem if stem.lower().endswith('.mpls') else f'{stem}.mpls'
         mpl_full = os.path.normpath(mpl_full)
-        if not os.path.isfile(mpl_full):
-            return '', '', '00:00:00.000'
-        try:
-            ch = Chapter(mpl_full)
-        except Exception:
-            return '', '', '00:00:00.000'
-        rows = sum(map(len, ch.mark_info.values()))
+        playlist = self._loaded_playlist(mpl_full)
+        if chapter is None:
+            try:
+                chapter = playlist.chapter if playlist is not None else Chapter(mpl_full)
+            except Exception:
+                return '', '', '00:00:00.000'
+        rows = sum(map(len, chapter.mark_info.values()))
         j1c = max(1, min(int(j1), rows + 1))
         j2c = max(j1c + 1, min(int(j2), rows + 1))
-        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(ch)
-        start_off = float(index_to_offset.get(j1c, ch.get_total_time()))
-        end_off = float(index_to_offset.get(j2c, ch.get_total_time()))
+        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+        total_time = chapter.get_total_time()
+        start_off = float(index_to_offset.get(j1c, total_time))
+        end_off = float(index_to_offset.get(j2c, total_time))
         if end_off < start_off:
             end_off = start_off
         dur_str = get_time_str(end_off - start_off)
-        m2 = ''
-        det = ''
         try:
-            bases = BluraySubtitle.m2ts_basenames_from_mpls_timeline_window(mpl_full, start_off, end_off)
-            m2 = ', '.join(bases)
+            detail = BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window(
+                mpl_full, start_off, end_off, chapter=chapter,
+                stream_timings=playlist.stream_timings if playlist is not None else None,
+            )
         except Exception:
-            m2 = ''
-        if not m2:
-            fb = list(dict.fromkeys([index_to_m2ts[i] for i in range(j1c, j2c) if i in index_to_m2ts]))
-            m2 = ', '.join(fb)
-        try:
-            det = BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window(mpl_full, start_off, end_off)
-        except Exception:
-            det = ''
-        return m2, det, dur_str
+            detail = ''
+        basenames = dict.fromkeys(name for name, _, _ in parse_m2ts_file_detail_segments(detail))
+        if not basenames:
+            basenames = dict.fromkeys(index_to_m2ts[i] for i in range(j1c, j2c) if i in index_to_m2ts)
+        return ', '.join(basenames), detail, dur_str
 
     def _apply_end_combo_min_constraint(self, combo: QComboBox, min_allowed: int):
         model = combo.model()
@@ -453,6 +450,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         break
 
     def _refresh_table2_m2ts_duration_from_widgets(self, labels: list[str]) -> None:
+        for _ in self._build_table2_m2ts_duration_from_widgets(labels):
+            pass
+
+    def _build_table2_m2ts_duration_from_widgets(self, labels: list[str]) -> Generator[None, None, None]:
         """Recompute M2TS details and episode duration from the current chapter bounds."""
         need = ('start_at_chapter', 'end_at_chapter', 'm2ts_file', 'ep_duration', 'bdmv_index')
         if self._is_movie_mode():
@@ -477,7 +478,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if k not in chapter_cache:
                 try:
                     mpl_path = k if k.lower().endswith('.mpls') else f'{k}.mpls'
-                    chapter_cache[k] = Chapter(os.path.normpath(mpl_path))
+                    path = os.path.normpath(mpl_path)
+                    playlist = self._loaded_playlist(path)
+                    chapter_cache[k] = playlist.chapter if playlist is not None else Chapter(path)
                 except Exception:
                     return None
             return chapter_cache[k]
@@ -535,7 +538,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 new_dur_str = get_time_str(max(0.0, end_off - start_off))
             else:
                 new_m2_str, new_detail_str, new_dur_str = self._table2_m2ts_detail_duration_from_chapter_bounds(
-                    mpls_no_ext, j1, j2)
+                    mpls_no_ext, j1, j2, chapter=chapter)
                 trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
                 if trim_checkbox and trim_checkbox.isChecked() and self.get_selected_function_id() in (3, 4):
                     trimmed_end, removed_m2ts = episode_tail_trim_plan(chapter, start_off, end_off)
@@ -551,8 +554,11 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                 if mpls_no_ext.lower().endswith('.mpls')
                                 else f'{mpls_no_ext}.mpls'
                             )
+                            path = os.path.normpath(mpl_full)
+                            playlist = self._loaded_playlist(path)
                             new_detail_str = BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window(
-                                os.path.normpath(mpl_full), start_off, trimmed_end,
+                                path, start_off, trimmed_end, chapter=chapter,
+                                stream_timings=playlist.stream_timings if playlist is not None else None,
                             )
                         except Exception:
                             new_detail_str = ''
@@ -560,6 +566,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.table2.setItem(r, duration_col, QTableWidgetItem(new_dur_str))
             if m2ts_detail_col >= 0:
                 self.table2.setItem(r, m2ts_detail_col, QTableWidgetItem(new_detail_str))
+            yield
 
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int,
                                  selected_value: int = 0) -> QComboBox:
@@ -690,7 +697,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         return f'chapter {chapter_no:02d}'
 
     def _chapter_node_data(self, mpls_path_no_ext: str) -> dict[str, object]:
-        chapter = Chapter(mpls_path_no_ext + '.mpls')
+        path = mpls_path_no_ext + '.mpls'
+        playlist = self._loaded_playlist(path)
+        chapter = playlist.chapter if playlist is not None else Chapter(path)
         index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
         rows = sum(map(len, chapter.mark_info.values()))
         offsets: dict[int, float] = {}
@@ -1712,7 +1721,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if whole_main_track_info:
                 # Encode stages through the same main remux command, so alternate-MPLS PIDs must be
                 # reflected in that automatic command before either workflow captures the GUI state.
-                self._refresh_table1_remux_cmds()
+                yield from self._build_table1_remux_cmds()
 
             def _sp_entry_sort_key(e: dict[str, object]):
                 return (

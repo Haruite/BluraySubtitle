@@ -29,6 +29,7 @@ GPU_BACKENDS = {
     'nvenc': 'NVENC', 'qsv': 'Quick Sync', 'amf': 'AMF',
     'videotoolbox': 'VideoToolbox', 'mf': 'Media Foundation', 'vulkan': 'Vulkan',
 }
+_GPU_TRIAL_PRESET = 'Balanced'
 _FFV1_DEPTHS = ('8', '10', '12')
 _VENDOR_BACKENDS = {0x10DE: 'nvenc', 0x8086: 'qsv', 0x1002: 'amf'}
 _PRORES_PROFILES = {
@@ -51,6 +52,7 @@ class GpuEncodeDevice:
     hardware_id: str = ''
     vulkan_adapter: str | None = None
     cuda_adapter: str | None = None
+    probe_paths: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -467,6 +469,16 @@ def gpu_chroma_candidates(choice: VideoEncodeChoice) -> tuple[str, ...]:
     return ('yuv420',)
 
 
+def verified_gpu_chroma_formats(choice: VideoEncodeChoice, ffmpeg: str, ffprobe: str) -> tuple[str, ...]:
+    """Reuse the trial when its default parameters and executables match."""
+    device = choice.device
+    assert device is not None
+    if (choice.encoder != 'prores' and device.probe_paths == (ffmpeg, ffprobe)
+            and choice.parameters == gpu_presets(device, choice.encoder, choice.bit_depth).get(_GPU_TRIAL_PRESET)):
+        return ('yuv420',)
+    return ()
+
+
 def hardware_encode_command(
         ffmpeg: str, choice: VideoEncodeChoice, source_args: list[str], output_args: list[str], *,
         metadata_args: tuple[str, ...] = (),
@@ -624,9 +636,11 @@ def probe_gpu_chroma_formats(
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), **kwargs,
         )
 
-    supported = []
+    supported = list(verified_gpu_chroma_formats(choice, ffmpeg, ffprobe))
     failures = []
     for chroma_format in gpu_chroma_candidates(choice):
+        if chroma_format in supported:
+            continue
         try:
             accepted, stream = _verify_hardware_output(
                 ffmpeg, ffprobe, replace(choice, chroma_format=chroma_format), run,
@@ -652,7 +666,7 @@ def discover_gpu_encoders(
         *,
         report: Callable[[str], None] | None = None,
 ) -> tuple[GpuEncodeDevice, ...]:
-    """List the encoder modes advertised by the FFmpeg build and the driver."""
+    """Verify advertised 4:2:0 hardware modes with short encodes."""
 
     def emit(message: str, **values) -> None:
         if report is not None:
@@ -784,16 +798,29 @@ def discover_gpu_encoders(
             backend = 'vulkan' if codec == 'ffv1' else device.backend
             if f'{codec}_{backend}' not in encoders:
                 continue
-            presets = [
-                (codec, depth, name) for name in _preset_parameters(device, codec, depth)
-                if codec != 'prores' or name in advertised[codec, depth]
-            ]
+            presets = _preset_parameters(device, codec, depth)
+            if codec == 'prores':
+                # ProRes profiles define 4:2:2 or 4:4:4 output.
+                presets = {name: parameters for name, parameters in presets.items() if name in advertised[codec, depth]}
+            else:
+                emit('Trial encode: {codec}, {depth}-bit yuv420, {preset}',
+                     codec=GPU_CODECS[codec], depth=depth, preset=translate_text(_GPU_TRIAL_PRESET))
+                choice = VideoEncodeChoice(codec, depth, presets[_GPU_TRIAL_PRESET], device)
+                try:
+                    accepted, stream = _verify_hardware_output(ffmpeg, ffprobe, choice, run)
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    emit('Probe failed: {error}', error=error)
+                    continue
+                if not accepted:
+                    emit('Unexpected encoder output: {stream}', stream=json.dumps(stream, ensure_ascii=False))
+                    continue
+                emit('Passed')
             if presets:
                 modes.append((codec, depth))
-                supported_presets.extend(presets)
+                supported_presets.extend((codec, depth, name) for name in presets)
         if modes:
             devices.append(replace(device, formats=tuple(modes), supported_presets=tuple(supported_presets),
-                                   static_hdr_input_options=static_hdr_options))
+                                   static_hdr_input_options=static_hdr_options, probe_paths=(ffmpeg, ffprobe)))
     emit('Available GPU devices: {count}', count=len(devices))
     for device in devices:
         report_formats = ', '.join(f'{GPU_CODECS[codec]} {depth}-bit' for codec, depth in device.formats)

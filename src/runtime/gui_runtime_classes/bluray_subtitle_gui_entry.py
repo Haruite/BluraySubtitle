@@ -24,8 +24,8 @@ from ..gui_runtime_split.track_and_attachment_editing import TrackAttachmentEdit
 from ..gui_runtime_split.vpy_edit_and_preview import VpyEditPreviewMixin
 from ..gui_runtime_split.gui_base import BluraySubtitleGuiBase
 from .desktop_appearance import apply_title_bar_theme, desktop_appearance
-from .widget_animations import DialogFade, animate_window_open, window_is_fading_out, window_opacity
-from .window_caption import refresh_window_caption
+from .widget_animations import DialogFade, animate_window_open, set_window_opacity, window_is_fading_out, window_opacity
+from .window_caption import prepare_window_surface, refresh_window_caption
 from .window_background import background_panel_colors
 
 
@@ -36,6 +36,13 @@ _BACKGROUND_CONTENT_STYLE = (
     'QWidget#scrollContent QTableWidget,QWidget#scrollContent QLabel,'
     'QWidget#scrollContent QCheckBox,QWidget#scrollContent QRadioButton{background:transparent;}'
 )
+
+
+def _follows_owner_opacity(widget: QWidget) -> bool:
+    return widget.windowType() == Qt.WindowType.ToolTip or (
+        widget.windowType() == Qt.WindowType.Popup
+        and (isinstance(widget.parentWidget(), QComboBox) or isinstance(widget, QMenu))
+    )
 
 
 class BluraySubtitleGUI(
@@ -58,10 +65,16 @@ class BluraySubtitleGUI(
 
     def __init__(self, application_log: ApplicationLog | None = None):
         super().__init__(application_log)
+        # Paint the stylesheet background when the opacity effect renders this QWidget subclass.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self._appearance_refresh = QTimer(self)
         self._appearance_refresh.setSingleShot(True)
         self._appearance_refresh.timeout.connect(self._check_platform_appearance)
         QApplication.instance().installEventFilter(self)
+        # Qt can polish the toolbar's popup lists while the main window is being constructed.
+        for widget in QApplication.topLevelWidgets():
+            if _follows_owner_opacity(widget):
+                prepare_window_surface(widget)
         appearance = desktop_appearance()
         if appearance is not None:
             appearance.accent_changed.connect(self._refresh_desktop_accent)
@@ -121,29 +134,26 @@ class BluraySubtitleGUI(
             and isinstance(watched, QWidget) and window_is_fading_out(watched.window())
         ):
             return True
-        if (isinstance(watched, QWidget) and getattr(watched, '_app_caption_enabled', False)
-                and event_type in (QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.WindowTitleChange, QEvent.Type.FontChange)):
+        if (event_type in (QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.WindowTitleChange, QEvent.Type.FontChange)
+                and isinstance(watched, QWidget) and getattr(watched, '_app_caption_enabled', False)):
             refresh_window_caption(watched)
         if event_type in (QEvent.Type.Polish, QEvent.Type.Show) and isinstance(watched, QWidget):
             self._apply_widget_font(watched)
+            if _follows_owner_opacity(watched):
+                if event_type == QEvent.Type.Polish:
+                    prepare_window_surface(watched)
+                elif self._window_opacity_supported():
+                    parent = watched.parentWidget()
+                    owner = parent.window() if parent is not None else self
+                    set_window_opacity(watched, window_opacity(owner))
+            elif event_type == QEvent.Type.Show and watched.isWindow() and not event.spontaneous():
+                apply_title_bar_theme(watched, (watched.property('logWindowTheme') or self._theme_mode) == 'dark')
+                if watched is self or isinstance(watched, DialogFade):
+                    animate_window_open(watched)
         if event_type == QEvent.Type.Wheel and isinstance(watched, (QComboBox, QAbstractSpinBox)):
             # Pass wheel input to the enclosing scroll area. Popup lists scroll independently.
             event.ignore()
             return True
-        if event_type == QEvent.Type.Show and isinstance(watched, QWidget):
-            if watched.isWindow() and not event.spontaneous():
-                apply_title_bar_theme(watched, (watched.property('logWindowTheme') or self._theme_mode) == 'dark')
-                if watched is self or isinstance(watched, DialogFade):
-                    animate_window_open(watched)
-            parent = watched.parentWidget()
-            window_type = watched.windowType()
-            follows_owner_opacity = window_type == Qt.WindowType.ToolTip or (
-                window_type == Qt.WindowType.Popup
-                and (isinstance(parent, QComboBox) or isinstance(watched, QMenu))
-            )
-            if follows_owner_opacity and self._window_opacity_supported():
-                owner = parent.window() if parent is not None else self
-                watched.setWindowOpacity(window_opacity(owner))
         return super().eventFilter(watched, event)
 
     def __getattribute__(self, name: str):

@@ -25,7 +25,7 @@ from PyQt6.QtCore import PYQT_VERSION_STR, qVersion
 from linux_runtime_libs import GLIBC, HOST_DRIVER
 from stage_linux_portable import dependency_paths, remove_build_rpaths, stage_glibc, stage_qt
 from update_third_party_notices import generate_linux_third_party_notices
-from vapoursynth_plugin_versions import fallback_version
+from vapoursynth_plugin_versions import fallback_version, reported_version
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,8 +150,8 @@ def plugin_notice_rows(directory: Path, files: list[Path]) -> str:
         plugin = registered.get(file.resolve())
         name, project = PLUGIN_PROJECTS.get(file.name, (file.stem, ""))
         release = fallback_version(file, normalize=False)
-        if release is None and plugin and plugin.version.major >= 0:
-            release = f"{plugin.version.major}.{plugin.version.minor}"
+        if release is None and plugin is not None:
+            release = reported_version(plugin)
         version = f"`{release}`" if release else "—"
         source = urljoin("https://github.com/", project) if project else "—"
         rows.append(f"| {name} | {version} | `linux/plugins/{file.name}` | {source} |")

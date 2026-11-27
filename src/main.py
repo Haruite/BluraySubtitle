@@ -21,7 +21,7 @@ if _wayland_quiet_rule not in _existing_rules:
         f"{_existing_rules};{_wayland_quiet_rule}" if _existing_rules else _wayland_quiet_rule
     )
 
-# X11 and XWayland support compositor-controlled window opacity. Let Qt try Wayland if X11 is unavailable.
+# Prefer X11/XWayland desktop integration and let Qt fall back to native Wayland.
 if sys.platform.startswith(("linux", "freebsd")) and os.environ.get("DISPLAY"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
 

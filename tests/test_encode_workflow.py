@@ -166,21 +166,36 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(command.output_extension, '.ivf')
             self.assertFalse(output.parent.exists())
 
-    def test_windows_arm64_discovery_matches_vulkan_to_nvidia_without_trials(self) -> None:
+    def test_windows_arm64_discovery_filters_gpu_modes_with_yuv420_trials(self) -> None:
         nvenc = GpuEncodeDevice('nvidia', 'NVIDIA', 'nvenc', 'd3d11va', '0', hardware_id='luid:01')
         qsv = GpuEncodeDevice('intel', 'Intel', 'qsv', 'd3d11va', '1', hardware_id='luid:02')
         listed = b' V..... hevc_nvenc\n V..... h264_nvenc\n V..... hevc_mf\n V..... hevc_qsv\n V..... ffv1_vulkan\n'
+        trials = []
 
         def run(args, **kwargs):
             if args[1:] == ['nvenc', '0']:
-                output = b'hevc 8\nvvc 10\n'
+                output = b'hevc 8\nh264 8\nvvc 10\n'
             elif args[1:] == ['--list-vulkan']:
                 output = (b'8086\t00000000000000000000000000000002\tluid:02\t8,10\tIntel\n'
-                          b'10de\t00000000000000000000000000000001\tluid:01\t10,12\tNVIDIA\n')
+                          b'10de\t00000000000000000000000000000001\tluid:01\t8,10,12\tNVIDIA\n')
             elif '-encoders' in args:
                 output = listed
             elif '-h' in args:
                 output = b''
+            elif '-frames:v' in args:
+                encoder = args[args.index('-c:v') + 1]
+                pixels = args[args.index('-i') + 1].partition(',format=')[2]
+                option = '-coder' if encoder == 'ffv1_vulkan' else '-preset'
+                trials.append((encoder, pixels, args[args.index(option) + 1]))
+                if encoder == 'h264_nvenc':
+                    return subprocess.CompletedProcess(args, 1, b'', b'Encoder initialization failed')
+                if encoder == 'ffv1_vulkan' and pixels == 'yuv420p':
+                    pixels = 'yuv422p'
+                output = json.dumps({'streams': [{
+                    'codec_name': encoder.split('_')[0], 'pix_fmt': pixels, 'nb_read_frames': '4',
+                }]}).encode()
+            elif '-count_frames' in args:
+                output = kwargs['input']
             else:
                 self.fail(f'Unexpected GPU probe command: {args}')
             return subprocess.CompletedProcess(args, 0, output, b'')
@@ -197,6 +212,11 @@ class EncodeWorkflowTests(unittest.TestCase):
                 devices = hardware_encode.discover_gpu_encoders(str(root / 'ffmpeg.exe'), str(root / 'ffprobe.exe'))
 
         device, = devices
+        self.assertCountEqual(trials, [
+            ('hevc_nvenc', 'yuv420p', 'p5'), ('h264_nvenc', 'yuv420p', 'p5'),
+            ('ffv1_vulkan', 'yuv420p', 'range_tab'), ('ffv1_vulkan', 'yuv420p10le', 'range_tab'),
+            ('ffv1_vulkan', 'yuv420p12le', 'range_tab'),
+        ])
         self.assertEqual((device.key, device.formats), ('nvidia', (('hevc', '8'), ('ffv1', '10'), ('ffv1', '12'))))
         presets = hardware_encode.gpu_presets(device, 'ffv1', '12')
         self.assertEqual(set(presets), {'Fast', 'Balanced'})

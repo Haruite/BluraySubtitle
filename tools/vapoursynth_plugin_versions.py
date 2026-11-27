@@ -15,7 +15,7 @@ def normalize_version(value: str) -> str:
     return re.sub(r"(?<=[0-9])_(?=[0-9])", ".", value)
 
 
-def usable_version(value, target: str) -> str | None:
+def usable_version(value, target: str | None) -> str | None:
     if isinstance(value, dict):
         value = value.get("version")
     if isinstance(value, bytes):
@@ -23,15 +23,18 @@ def usable_version(value, target: str) -> str | None:
     if not isinstance(value, str):
         return None
     value = value.strip()
-    if target.startswith("commit:"):
+    if target is not None and target.startswith("commit:"):
         match = re.search(r"-g([0-9a-f]{7,40})$", value)
         if match:
             revision = match.group(1)
             return target if revision.startswith(target[7:]) else "commit:" + revision
         return None
-    value = normalize_version(re.sub(r"-0-g[0-9a-f]+$", "", value))
+    tag = re.sub(r"-0-g[0-9a-f]+$", "", value)
+    value = normalize_version(tag)
     if not re.fullmatch(r"[0-9][0-9A-Za-z.+~-]*", value):
         return None
+    if target is None:
+        return tag
     expected = normalize_version(target)
     if re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
         actual_parts = [int(part) for part in value.split(".")]
@@ -48,7 +51,7 @@ def usable_version(value, target: str) -> str | None:
     return value
 
 
-def reported_version(plugin, target: str) -> str | None:
+def reported_version(plugin, target: str | None = None) -> str | None:
     import vapoursynth as vs
 
     for function in plugin.functions():
@@ -58,7 +61,8 @@ def reported_version(plugin, target: str) -> str | None:
             except (vs.Error, UnicodeError, TypeError, ValueError):
                 value = None
             # The upstream vs-nlm-ispc v4 Windows release still reports v3.
-            if plugin.name == "Non-local means denoise filter implemented in ISPC" and normalize_version(target) == "4" and value == "3":
+            if (target is not None and plugin.name == "Non-local means denoise filter implemented in ISPC"
+                    and normalize_version(target) == "4" and value == "3"):
                 value = None
             if value is not None:
                 return value

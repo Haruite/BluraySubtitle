@@ -12,11 +12,13 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from typing import Callable, Optional
 
 import pycountry
 
 from src.bdmv import M2TS, MPLS, Chapter, pid_to_lang_from_m2ts_path
+from src.bdmv.m2ts import M2TSTiming
 from src.core import get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
 from src.core.tool_paths import require_tool_path, tool_path, tool_path_exists
@@ -63,9 +65,11 @@ def _cached_m2ts_parser(m2ts_path: str) -> Optional[M2TS]:
         return parser
 
 
-def _m2ts_cached_pts_dur(
+def _read_m2ts_timing(
         m2ts_path: str, *, check_canceled: Callable[[], None] | None = None,
-) -> tuple[Optional[int], Optional[int]]:
+) -> M2TSTiming | None:
+    if not m2ts_path or not os.path.isfile(m2ts_path):
+        return None
     parser = _cached_m2ts_parser(m2ts_path)
     if parser is None:
         return None, None
@@ -73,8 +77,27 @@ def _m2ts_cached_pts_dur(
         return parser.get_first_pts(m2ts=True, check_canceled=check_canceled), int(
             parser.get_duration(check_canceled=check_canceled),
         )
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, IndexError, struct.error):
         return None, None
+
+
+def _m2ts_clip_window(timing: M2TSTiming | None, in_time: int, out_time: int) -> tuple[bool, float, float]:
+    clip_sec = max(0.0, (out_time - in_time) / 45000.0)
+    pts, dur90 = timing if timing is not None else (None, None)
+    if pts is None:
+        return False, 0.0, clip_sec
+    start_sec = (in_time * 2 - pts) / 90000.0
+    end_sec = start_sec + clip_sec
+    file_dur_sec = (dur90 / 90000.0) if (dur90 is not None and dur90 > 0) else clip_sec
+    if abs(start_sec) < 1e-3 and abs(end_sec - file_dur_sec) < 1e-3:
+        return False, 0.0, file_dur_sec
+    start = max(0.0, start_sec)
+    end = max(0.0, end_sec)
+    if end <= start + 1e-3:
+        # Avoid a zero-length split when the raw interval is out of range.
+        return False, 0.0, file_dur_sec
+    return True, start, end
+
 
 def _mpls_play_rows_cached(mpls_path: str) -> list:
     """Cache playlist rows for detail views only while the MPLS file is unchanged."""
@@ -2607,28 +2630,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         end   = start + (out_time-in_time)/45000
         No split when start==0 and end ~= file duration.
         """
-        clip_sec = max(0.0, (out_time - in_time) / 45000.0)
-        pts: Optional[int] = None
-        dur90: Optional[int] = None
-        try:
-            if m2ts_path and os.path.isfile(m2ts_path):
-                pts, dur90 = _m2ts_cached_pts_dur(m2ts_path)
-        except Exception:
-            pts = None
-            dur90 = None
-        if pts is None:
-            return False, 0.0, clip_sec
-        start_sec = (in_time * 2 - pts) / 90000.0
-        end_sec = start_sec + clip_sec
-        file_dur_sec = (dur90 / 90000.0) if (dur90 is not None and dur90 > 0) else clip_sec
-        if abs(start_sec) < 1e-3 and abs(end_sec - file_dur_sec) < 1e-3:
-            return False, 0.0, file_dur_sec
-        s = max(0.0, start_sec)
-        e = max(0.0, end_sec)
-        if e <= s + 1e-3:
-            # Guard against producing --split parts:00:00:00.000-00:00:00.000
-            return False, 0.0, file_dur_sec
-        return True, s, e
+        return _m2ts_clip_window(_read_m2ts_timing(m2ts_path), in_time, out_time)
 
     @staticmethod
     def m2ts_file_detail_whole_stream_file(m2ts_path: str) -> str:
@@ -2640,10 +2642,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             m2ts_path: str, *, check_canceled: Callable[[], None] | None = None,
     ) -> tuple[float, str]:
         name = os.path.basename(str(m2ts_path or '')) or ''
-        if not m2ts_path or not os.path.isfile(m2ts_path):
-            return 0.0, f'{name}(00:00:00.000-00:00:00.000)'
         try:
-            _pts, dur90 = _m2ts_cached_pts_dur(m2ts_path, check_canceled=check_canceled)
+            timing = _read_m2ts_timing(m2ts_path, check_canceled=check_canceled)
+            dur90 = timing[1] if timing is not None else None
             end = max(0.0, (dur90 / 90000.0)) if (dur90 is not None and dur90 > 0) else 0.0
         except TaskCancelled:
             raise
@@ -2661,14 +2662,16 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     def m2ts_file_detail_from_mpls_playlist(
             mpls_path: str, *, chapter: Chapter | None = None,
             check_canceled: Callable[[], None] | None = None,
+            stream_timings: dict[str, M2TSTiming | None] | None = None,
     ) -> str:
         """
         ``name.m2ts(start-end),...`` for each ``Chapter(mpls_path).in_out_time`` row.
         Per README: ``start = (in_time*2 - first_pts)/90000``,
         ``end = start + (out_time-in_time)/45000``; clip base name is tuple[0].
+        During a disc scan, collect stream timings by basename for reuse across playlists.
         """
         mp = str(mpls_path or '').strip()
-        if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
+        if not mp.lower().endswith('.mpls') or (chapter is None and not os.path.isfile(mp)):
             return ''
         playlist_dir = os.path.dirname(os.path.normpath(mp))
         stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
@@ -2683,24 +2686,20 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         for fname, in_time, out_time in rows:
             if check_canceled is not None:
                 check_canceled()
-            m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
             base_name = f'{fname}.m2ts'
             clip_sec = max(0.0, (out_time - in_time) / 45000.0)
             if clip_sec <= eps:
                 continue
-            # UI detail always reflects playlist in/out (README formula), not whole-file shortcut.
-            slice_start = 0.0
-            slice_end = clip_sec
-            if os.path.isfile(m2ts_path):
-                try:
-                    pts, _dur90 = _m2ts_cached_pts_dur(m2ts_path, check_canceled=check_canceled)
-                    if pts is not None:
-                        slice_start = max(0.0, (in_time * 2 - pts) / 90000.0)
-                        slice_end = slice_start + clip_sec
-                except TaskCancelled:
-                    raise
-                except Exception:
-                    pass
+            if stream_timings is not None and base_name in stream_timings:
+                timing = stream_timings[base_name]
+            else:
+                timing = _read_m2ts_timing(os.path.join(stream_dir, base_name), check_canceled=check_canceled)
+                if stream_timings is not None:
+                    stream_timings[base_name] = timing
+            # Full-playlist detail reflects the authored in/out points even for whole files.
+            pts = timing[0] if timing is not None else None
+            slice_start = max(0.0, (in_time * 2 - pts) / 90000.0) if pts is not None else 0.0
+            slice_end = slice_start + clip_sec
             if slice_end <= slice_start + eps:
                 continue
             st = get_time_str(slice_start)
@@ -2738,7 +2737,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return ','.join(parts)
 
     @staticmethod
-    def m2ts_file_detail_for_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> str:
+    def m2ts_file_detail_for_mpls_timeline_window(
+            mpls_path: str, w0: float, w1: float, *, chapter: Chapter | None = None,
+            stream_timings: Mapping[str, M2TSTiming | None] | None = None,
+    ) -> str:
         """
         ``name.m2ts(start-end),...`` for the overlap of [w0,w1) with each playlist clip.
         Slice math matches ``_try_remux_mpls_split_outputs_track_aligned`` (multi-output fallback).
@@ -2749,11 +2751,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if w1 <= w0 + overlap_tolerance:
             return ''
         mp = str(mpls_path or '').strip()
-        if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
+        if not mp.lower().endswith('.mpls') or (chapter is None and not os.path.isfile(mp)):
             return ''
         playlist_dir = os.path.dirname(os.path.normpath(mp))
         stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
-        play_rows = _mpls_play_rows_cached(mp)
+        play_rows = chapter.in_out_time if chapter is not None else _mpls_play_rows_cached(mp)
         if not play_rows:
             return ''
         eps = overlap_tolerance
@@ -2767,11 +2769,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             acc = clip_acc + dur
             if dur <= eps or seg_lo + eps >= seg_hi:
                 continue
-            m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
             base_name = f'{fname}.m2ts'
-            if not os.path.isfile(m2ts_path):
+            timing = (stream_timings.get(base_name) if stream_timings is not None
+                      else _read_m2ts_timing(os.path.join(stream_dir, base_name)))
+            if timing is None:
                 continue
-            need, a, b = MediaInfoTrackMappingMixin._m2ts_clip_time_window_sec(m2ts_path, in_time, out_time)
+            need, a, b = _m2ts_clip_window(timing, in_time, out_time)
             full_lo = 0.0 if not need else float(a)
             full_hi = float(b)
             span = max(0.0, full_hi - full_lo)
@@ -2795,22 +2798,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 ed = '00:00:00.000'
             parts.append(f'{base_name}({st}-{ed})')
         return ','.join(parts)
-
-    @staticmethod
-    def m2ts_basenames_from_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> list[str]:
-        """Ordered unique ``*.m2ts`` names used by ``m2ts_file_detail_for_mpls_timeline_window`` for [w0,w1)."""
-        detail = MediaInfoTrackMappingMixin.m2ts_file_detail_for_mpls_timeline_window(mpls_path, w0, w1)
-        out: list[str] = []
-        for seg in (detail or '').split(','):
-            seg = seg.strip()
-            if not seg:
-                continue
-            head = seg.split('(', 1)[0].strip()
-            bn = os.path.basename(head)
-            if bn.lower().endswith('.m2ts') and bn not in out:
-                out.append(bn)
-        return out
-
 
     @staticmethod
     def _mkvmerge_select_flags_from_mapped(

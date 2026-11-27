@@ -72,6 +72,7 @@ class UiPreferences:
     log_background_blur: int = 0
     fonts: FontPreferences = FontPreferences()
     scale_percent: int = 0
+    suppress_mpv_output: bool = True
 
 
 @dataclass(frozen=True)
@@ -508,6 +509,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             scale_percent=_ui_scale_percent(ui),
             opacity=_integer_value(ui, "opacity", UiPreferences.opacity, 60, 100),
             save_log_to_file=_boolean_value(ui, "save_log_to_file", UiPreferences.save_log_to_file),
+            suppress_mpv_output=_boolean_value(ui, "suppress_mpv_output", UiPreferences.suppress_mpv_output),
             log_line_limit=_integer_value(ui, "log_line_limit", UiPreferences.log_line_limit, 1, MAX_LOG_LINE_LIMIT),
             log_theme=log_theme,
             close_to_tray=_boolean_value(ui, "close_to_tray", UiPreferences.close_to_tray),

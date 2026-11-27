@@ -16,8 +16,8 @@ from src.core.video_format import cpu_chroma_formats
 from src.runtime import TaskCancelled
 from src.runtime.hardware_encode import (
     GPU_CODECS, GpuEncodeDevice, VideoEncodeChoice,
-    cpu_device_name, discover_gpu_encoders, gpu_detection_supported, gpu_device_label, gpu_presets,
-    probe_gpu_chroma_formats,
+    cpu_device_name, discover_gpu_encoders, gpu_chroma_candidates, gpu_detection_supported, gpu_device_label,
+    gpu_presets, probe_gpu_chroma_formats, verified_gpu_chroma_formats,
 )
 from .custom_table_widget import StyledComboBox
 from .encode_preset_editor import EncodePresetEditor
@@ -218,14 +218,17 @@ class _DeviceBox(QGroupBox):
         else:
             self.parameters.setPlainText(value)
 
-    def set_chroma_formats(self, formats: tuple[str, ...], selected: str = '', placeholder: str = '') -> None:
+    def set_chroma_formats(
+            self, formats: tuple[str, ...], selected: str = '', placeholder: str = '', *, allow_fallback: bool = True,
+    ) -> None:
         with QSignalBlocker(self.chroma):
             self.chroma.clear()
             self.chroma.setPlaceholderText(placeholder)
             for chroma_format in formats:
                 self.chroma.addItem(chroma_format, chroma_format)
             if formats:
-                self.chroma.setCurrentIndex(max(0, self.chroma.findData(selected)))
+                index = self.chroma.findData(selected)
+                self.chroma.setCurrentIndex(max(0, index) if allow_fallback else index)
         self.chroma.setEnabled(bool(formats))
 
 
@@ -348,8 +351,17 @@ class EncodeDeviceControls(QWidget):
             if controls.chroma_probe is not None:
                 controls.chroma_probe.cancel.set()
             controls.chroma_request = request
-            controls.chroma_pending = request is not None
-            controls.set_chroma_formats((), placeholder=self.t('Checking formats...') if request else '')
+            candidates = verified = ()
+            if request is not None:
+                paths, choice = request
+                candidates = gpu_chroma_candidates(choice)
+                verified = verified_gpu_chroma_formats(choice, *paths)
+            controls.chroma_pending = verified != candidates
+            controls.set_chroma_formats(
+                verified, controls.preferred_chroma,
+                self.t('Checking formats...') if controls.chroma_pending else '',
+                allow_fallback=not controls.chroma_pending or controls.preferred_chroma not in candidates,
+            )
             controls.chroma_field.setToolTip('')
         if any(controls.chroma_pending and controls.chroma_probe is None for controls in self._controls.values()):
             self._chroma_timer.start()
@@ -424,15 +436,18 @@ class EncodeDeviceControls(QWidget):
                                   manage_presets=self._manage_presets)
             controls.preferred_chroma = saved.chroma_format
             controls.checkbox.setChecked(saved.enabled)
-            if controls.preset_editor is not None:
-                controls.preset_editor.custom_presets = list(saved.custom_presets)
+            editor = controls.preset_editor
+            if editor is not None:
+                editor.custom_presets = list(saved.custom_presets)
             self._controls[device.key] = controls
             for candidate in dict.fromkeys(codec for codec, _ in device.formats):
                 controls.codec.addItem(GPU_CODECS[candidate], candidate)
             controls.codec.setCurrentIndex(max(0, controls.codec.findData(saved.codec)))
             self._gpu_layout.addWidget(controls)
             self._set_gpu_depths(device, saved.bit_depth, saved.preset)
-            if (saved.parameters is not None and (saved.preset != 'Default' or saved.parameters.strip())
+            selected_preset = editor.selected_name if editor is not None else controls.preset.currentData()
+            if (saved.parameters is not None
+                    and (saved.preset == selected_preset or saved.preset == 'Default' and saved.parameters.strip())
                     and saved.codec == controls.codec.currentData()
                     and saved.bit_depth == controls.bit_depth.currentData()):
                 controls.set_parameter_override(saved.parameters)

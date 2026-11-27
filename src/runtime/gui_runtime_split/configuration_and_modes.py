@@ -3,6 +3,7 @@ import copy
 import os
 import re
 import traceback
+from collections.abc import Generator
 from functools import partial
 from typing import Optional
 
@@ -351,10 +352,11 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         chapter_cache: dict[str, tuple[Chapter, dict[int, float], int]] = {}
         for row in configuration.values():
             mpls_path = self._main_mpls_abs_path_for_remux_cmd_lookup(row)
-            if not mpls_path or not os.path.isfile(mpls_path):
-                continue
             if mpls_path not in chapter_cache:
-                chapter = Chapter(mpls_path)
+                playlist = self._loaded_playlist(mpls_path)
+                if playlist is None and (not mpls_path or not os.path.isfile(mpls_path)):
+                    continue
+                chapter = playlist.chapter if playlist is not None else Chapter(mpls_path)
                 _index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
                 total_end = sum(map(len, chapter.mark_info.values())) + 1
                 chapter_cache[mpls_path] = (chapter, index_to_offset, total_end)
@@ -830,6 +832,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             return False
 
     def _full_refresh_remux_encode_tables_for_mode(self) -> None:
+        for _ in self._build_remux_encode_tables_for_mode():
+            pass
+
+    def _build_remux_encode_tables_for_mode(self) -> Generator[None, None, None]:
         """Rebuild table2 and table3 after the source or movie/series mode changes.
 
         A full series refresh has two ordered passes: build table2 from the
@@ -871,12 +877,14 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             # The first pass creates all table2 widgets. Their visible values are
             # authoritative, so read them back before the only table3 refresh.
-            self.on_configuration(configuration, update_sp_table=False)
+            yield
+            yield from self._apply_configuration(configuration, update_sp_table=False, refresh_main_commands=False)
             # A full source refresh must classify the second pass as a segment rebuild. The first-pass widgets
             # are only inputs to that rebuild, not the comparison baseline for a later user edit.
             self._last_config_inputs = {}
             current_configuration = self._generate_configuration_from_ui_inputs() if self.table2.rowCount() > 0 else {}
-            self.on_configuration(current_configuration or configuration, update_sp_table=True)
+            yield
+            yield from self._apply_configuration(current_configuration or configuration)
         except Exception:
             if self._bdmv_table_updates is not None:
                 raise
@@ -913,6 +921,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             print_exc_terminal()
 
     def on_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool = True):
+        for _ in self._apply_configuration(configuration, update_sp_table):
+            pass
+
+    def _apply_configuration(
+            self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool = True,
+            *, refresh_main_commands: bool = True,
+    ) -> Generator[None, None, None]:
         """Apply a configuration to table2 and optionally rebuild table3 once.
 
         ``update_sp_table=False`` is used by the first pass of a series refresh
@@ -942,7 +957,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     key = str(mpls_no_ext or '').strip()
                     if key in chapter_cache:
                         return chapter_cache[key]
-                    ch_obj = Chapter(key + '.mpls')
+                    path = key + '.mpls'
+                    playlist = self._loaded_playlist(path)
+                    ch_obj = playlist.chapter if playlist is not None else Chapter(path)
                     chapter_cache[key] = ch_obj
                     return ch_obj
 
@@ -1097,6 +1114,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             btn_play.clicked.connect(partial(self.on_play_table2_disc_row, row_i, bdmv_col, m2ts_col))
                             self.table2.setItem(row_i, play_col, None)
                             self.table2.setCellWidget(row_i, play_col, btn_play)
+                        yield
                 else:
                     self.table2.setRowCount(len(configuration))
                     for sub_index, con in configuration.items():
@@ -1126,7 +1144,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         j2 = min(rows + 1, max(j1 + 1, j2))
                         sm = str(con.get('selected_mpls') or '').strip()
                         m2ts_joined, detail_txt, duration = self._table2_m2ts_detail_duration_from_chapter_bounds(
-                            sm, j1, j2)
+                            sm, j1, j2, chapter=chapter)
                         try:
                             has_beginning = bool(
                                 self._chapter_node_data(str(con['selected_mpls'])).get('has_beginning'))
@@ -1190,6 +1208,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 partial(self.on_play_table2_disc_row, sub_index, bdmv_col, m2ts_col))
                             self.table2.setItem(sub_index, play_col, None)
                             self.table2.setCellWidget(sub_index, play_col, btn_play)
+                        yield
                 if self.subtitle_folder_path.text().strip():
                     try:
                         sub_files = list_subtitle_files(self.subtitle_folder_path.text().strip())
@@ -1206,7 +1225,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 else:
                     self._sync_end_chapter_min_constraints(labels)
                     self._apply_start_chapter_constraints(labels)
-                self._refresh_table2_m2ts_duration_from_widgets(labels)
+                yield
+                yield from self._build_table2_m2ts_duration_from_widgets(labels)
 
                 if self._is_movie_mode():
                     self._finalize_movie_mode_table2_layout(labels)
@@ -1216,13 +1236,15 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     # action with these visible rows, not with the pre-regeneration snapshot.
                     self._last_config_inputs = self._collect_config_inputs()
                 if function_id in (3, 4, 5):
+                    yield
                     if update_sp_table:
                         self._tick_delayed_busy(busy, self.t('Refreshing SP table...'))
                         self.refresh_sp_table(configuration)
-                    try:
-                        self._refresh_table1_remux_cmds()
-                    except Exception:
-                        pass
+                    if refresh_main_commands:
+                        try:
+                            yield from self._build_table1_remux_cmds()
+                        except Exception:
+                            pass
             else:
                 if self._is_movie_mode():
                     return

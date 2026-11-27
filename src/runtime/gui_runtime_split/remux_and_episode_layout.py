@@ -655,6 +655,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         self._finalize_movie_mode_table2_layout(labels)
 
     def _refresh_table1_remux_cmds(self):
+        for _ in self._build_table1_remux_cmds():
+            pass
+
+    def _build_table1_remux_cmds(self) -> Generator[None, None, None]:
         if not hasattr(self, 'table1') or not self.table1:
             return
         cmd_col = BDMV_LABELS.index('remux_cmd')
@@ -683,6 +687,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table1.setRowHeight(row, max(self.table1.rowHeight(row), 220))
             if not selected_mpls_paths:
                 editor.update_generated_command('', reset=True)
+                yield
                 continue
             auto_cmd_lines: list[str] = []
             total_paths = len(selected_mpls_paths)
@@ -697,6 +702,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         name_seq_total=total_paths,
                     )
                 )
+                yield
             auto_cmd = '\n'.join([x for x in auto_cmd_lines if str(x).strip()])
             editor.update_generated_command(auto_cmd)
 
@@ -1179,9 +1185,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if has_discs and function_id in (3, 4, 5):
                 yield
                 self._refresh_track_selection_config_for_selected_main()
-                self._full_refresh_remux_encode_tables_for_mode()
+                yield
+                yield from self._build_remux_encode_tables_for_mode()
                 if self._is_movie_mode():
-                    self._refresh_table1_remux_cmds()
+                    yield from self._build_table1_remux_cmds()
             elif has_discs and function_id == 1:
                 # Preserve manually loaded subtitle rows and bind them to the new main playlists.
                 if self._is_movie_mode():

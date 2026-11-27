@@ -7,10 +7,12 @@ The declarations are verified against the mixins by
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
 from typing import Any, Callable, Optional
 
 
 from src.bdmv import Chapter
+from src.bdmv.m2ts import M2TSTiming
 from src.core.video_format import OutputResolution
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.remux import RemuxMainJob, RemuxRequest
@@ -525,15 +527,11 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def m2ts_basenames_from_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> list[str]:
-        raise NotImplementedError
-
-    @staticmethod
     def m2ts_file_basenames_from_mpls_playlist(mpls_path: str) -> list[str]:
         raise NotImplementedError
 
     @staticmethod
-    def m2ts_file_detail_for_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> str:
+    def m2ts_file_detail_for_mpls_timeline_window(mpls_path: str, w0: float, w1: float, *, chapter: Chapter | None=None, stream_timings: Mapping[str, M2TSTiming | None] | None=None) -> str:
         raise NotImplementedError
 
     @staticmethod
@@ -541,7 +539,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def m2ts_file_detail_from_mpls_playlist(mpls_path: str, *, chapter: Chapter | None=None, check_canceled: Callable[[], None] | None=None) -> str:
+    def m2ts_file_detail_from_mpls_playlist(mpls_path: str, *, chapter: Chapter | None=None, check_canceled: Callable[[], None] | None=None, stream_timings: dict[str, M2TSTiming | None] | None=None) -> str:
         raise NotImplementedError
 
     @staticmethod
