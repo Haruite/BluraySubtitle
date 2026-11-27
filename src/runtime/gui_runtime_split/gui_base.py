@@ -579,6 +579,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _main_mpls_abs_path_for_remux_cmd_lookup(conf: dict[str, int | str]) -> str:
         raise NotImplementedError
 
+    def _main_mpls_track_rows(self, mpls_path: str) -> list[dict[str, object]]:
+        raise NotImplementedError
+
     def _max_sp_serial_for_bdmv(self, bdmv_index: int) -> int:
         raise NotImplementedError
 

@@ -32,6 +32,7 @@ if not (PROJECT_ROOT / ".git").exists():
     )
 
 sys.path.insert(0, str(PROJECT_ROOT))
+from tools.build_ass_extension import MODULE as ASS_MODULE, build_ass_extension
 from tools.windows_native_tools import ARM64_NLM_CPU, file_hash, has_pe_machine, pyqt_runtime, runtime_dependencies
 from tools.windows_package_tools import build_executable_icon, installed_tools, package_tools
 
@@ -389,16 +390,18 @@ os.environ["PATH"] = os.pathsep.join(dict.fromkeys([
 ]))
 
 
+ass_extension = build_ass_extension(WORK_PATH / "ass-extension")
 a = Analysis(
     [str(entry_script)],
     pathex=[str(script_root), str(PROJECT_ROOT)],
-    binaries=binaries,
+    binaries=[*binaries, (str(ass_extension), ".")],
     datas=datas,
     hiddenimports=["muvsfunc", "mvsfunc", "vapoursynth"],
     hookspath=[str(PROJECT_ROOT / "tools" / "pyinstaller_hooks")],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        ASS_MODULE,  # The explicit binary above takes precedence over source-run builds.
         # muvsfunc's optional plotting helper is not used by the application.
         "matplotlib",
         "tkinter",
@@ -429,6 +432,8 @@ if r79:
     a.pure = [entry for entry in a.pure if entry[0] != "vapoursynth" and not entry[0].startswith("vapoursynth.")]
     a.binaries = [entry for entry in a.binaries if Path(entry[0]).parts[0].casefold() != "vapoursynth"]
 a.binaries = [entry for entry in a.binaries if keep_runtime_file(*entry[:2], root_binary_names)]
+if not any(Path(source).resolve() == ass_extension for _, source, _ in a.binaries):
+    raise RuntimeError("PyInstaller did not collect the ASS extension for this build")
 a.datas = [entry for entry in a.datas if keep_runtime_file(*entry[:2], root_binary_names)]
 
 pycountry_databases = WORK_PATH / "pycountry-databases"

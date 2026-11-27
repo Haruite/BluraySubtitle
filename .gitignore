@@ -5,6 +5,8 @@ __pycache__/
 
 
 # Distribution / packaging
+/_bluraysubtitle_ass*.pyd
+/_bluraysubtitle_ass*.so
 .Python
 .idea
 /config.json

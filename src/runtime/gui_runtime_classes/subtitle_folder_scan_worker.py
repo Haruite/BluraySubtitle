@@ -1,19 +1,18 @@
 from contextvars import copy_context
-import multiprocessing
 import os
-import sys
 import threading
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from functools import partial
 
 from PyQt6.QtCore import pyqtSignal, QObject
 
 from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
-from src.domain.subtitles import list_subtitle_files
-from src.domain.subtitles import parse_subtitle_worker as _parse_subtitle_worker
+from src.domain.subtitles import ass_model, list_subtitle_files
+from src.domain.subtitles.subtitle import ASS_EXTENSIONS
 from src.exports.utils import get_time_str, print_terminal_line, print_exc_terminal, print_tb_string_terminal
-from src.runtime import TaskCancelled
+from src.runtime import TaskCancelled, worker_process_context
 from src.runtime.services import BluraySubtitle
 
 
@@ -81,22 +80,15 @@ class SubtitleFolderScanWorker(QObject):
             self.label.emit('Parsing Subtitles 0/{}'.format(len(files)))
             self.progress.emit(0)
 
-            # Choose subtitle parsing strategy by platform.
-            if sys.platform == 'win32':
-                # Windows: use multiprocessing.
-                subtitle_cache = self._parse_subtitles_multiprocess(files)
-            else:
-                # Linux: try multiprocessing, then fallback to single process on failure.
-                try:
-                    subtitle_cache = self._parse_subtitles_multiprocess(files)
-                except TaskCancelled:
-                    raise
-                except Exception as e:
-                    print(
-                        f'{translate_text("Multiprocessing parse failed, switching to single-process mode: ")}{str(e)}')
-                    subtitle_cache = self._parse_subtitles_single(files)
+            try:
+                durations = self._scan_durations(files)
+            except TaskCancelled:
+                raise
+            except Exception as error:
+                print(f'{translate_text("Parallel subtitle scan failed, switching to sequential scanning: ")}{error}')
+                durations = self._scan_durations_single(files)
 
-            if not subtitle_cache:
+            if not durations:
                 if self.cancel_event.is_set():
                     raise TaskCancelled()
                 print(translate_text('Failed to load all subtitle files'))
@@ -105,15 +97,10 @@ class SubtitleFolderScanWorker(QObject):
                     '[BluraySubtitle] Subtitle-folder scan worker: finished successfully (no subtitles loaded).')
                 return
 
-            print(f'{translate_text("Loaded successfully ")}{len(subtitle_cache)}{translate_text(" subtitle files")}')
+            print(f'{translate_text("Loaded successfully ")}{len(durations)}{translate_text(" subtitle files")}')
 
-            successful_files = [p for p in files if p in subtitle_cache]
-
-            try:
-                rows = [(p, get_time_str(subtitle_cache[p].max_end_time())) for p in successful_files]
-            except Exception as e:
-                print(f'{translate_text("Failed to get subtitle duration: ")}{str(e)}')
-                rows = [(p, 'Unknown') for p in successful_files]
+            successful_files = [p for p in files if p in durations]
+            rows = [(p, get_time_str(durations[p])) for p in successful_files]
 
             configuration = {}
             if not (self.movie_mode and self.mode in (1, 3, 4)):
@@ -123,10 +110,10 @@ class SubtitleFolderScanWorker(QObject):
                     bs = BluraySubtitle(
                         self.bdmv_path, successful_files, self.checked, None, disc_folders=list(self.disc_folders),
                     )
-                    bs._subtitle_cache = subtitle_cache
                     configuration = bs.generate_configuration_from_selected_mpls(
                         self.selected_mpls,
-                        cancel_event=self.cancel_event
+                        cancel_event=self.cancel_event,
+                        subtitle_durations=durations,
                     )
                 except TaskCancelled:
                     raise
@@ -149,66 +136,56 @@ class SubtitleFolderScanWorker(QObject):
             print_tb_string_terminal(tb)
             self.failed.emit(tb)
 
-    def _parse_subtitles_single(self, files: list[str]) -> dict[str, Subtitle]:
-        """Parse subtitles in single-process mode."""
-        subtitle_cache: dict[str, Subtitle] = {}
+    def _check_cancel(self):
+        if self.cancel_event.is_set():
+            raise TaskCancelled()
+
+    def _scan_durations_single(self, files: list[str]) -> dict[str, float]:
+        durations: dict[str, float] = {}
         total = len(files)
-        loaded_count = 0
         for i, p in enumerate(files):
-            if self.cancel_event.is_set():
-                raise TaskCancelled()
+            self._check_cancel()
             try:
-                sub = Subtitle(p)
-                subtitle_cache[p] = sub
-                loaded_count += 1
+                durations[p] = Subtitle.read_duration(p, check_cancel=self._check_cancel)
                 print(f'{translate_text("Subtitle file loaded ｢")}{p}｣')
+            except TaskCancelled:
+                raise
             except Exception as e:
                 print(
                     f'{translate_text("Failed to load subtitle file ｢")}{p}｣: {type(e).__name__}: {str(e)}')
                 print_exc_terminal()
-            self.label.emit(f'Parsing Subtitles {i + 1}/{total} (loaded {loaded_count})')
+            self.label.emit(f'Parsing Subtitles {i + 1}/{total} (loaded {len(durations)})')
             self.progress.emit(int((i + 1) / total * 700))
-        return subtitle_cache
+        return durations
 
-    def _parse_subtitles_multiprocess(self, files: list[str]) -> dict[str, Subtitle]:
-        """Parse subtitles in multiprocessing mode."""
+    def _scan_durations(self, files: list[str]) -> dict[str, float]:
         if len(files) == 1:
-            # For a single file, use single-process directly.
-            return self._parse_subtitles_single(files)
+            return self._scan_durations_single(files)
 
-        subtitle_cache: dict[str, Subtitle] = {}
+        durations: dict[str, float] = {}
         max_workers = min(len(files), os.cpu_count() or 1)
-        try:
-            mp_context = multiprocessing.get_context('spawn')
-        except ValueError:
-            mp_context = None
-        try:
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as ex:
-                futures = [ex.submit(_parse_subtitle_worker, p) for p in files]
-                done = 0
-                total = len(futures)
-                for fut in as_completed(futures):
-                    if self.cancel_event.is_set():
-                        for f in futures:
-                            f.cancel()
-                        raise TaskCancelled()
-                    p = None
-                    try:
-                        p, sub = fut.result()
-                        if sub is not None:
-                            subtitle_cache[p] = sub
-                    except Exception as e:
-                        if p:
-                            print(
-                                f'{translate_text("Failed to load subtitle file ｢")}{p}｣: {str(e)}')
-                        else:
-                            print(f'{translate_text("Failed to load subtitle file: ")}{str(e)}')
-                    done += 1
-                    self.label.emit(f'Parsing Subtitles {done}/{total}')
-                    self.progress.emit(int(done / total * 700))
-        except TaskCancelled:
-            raise
-        except Exception as e:
-            # Propagate exception so the caller can handle fallback.
-            raise Exception(f'Multiprocessing parse failed: {str(e)}')
-        return subtitle_cache
+        thread_extensions = ('.sup',) + (ASS_EXTENSIONS if ass_model.ass_native else ())
+        if all(path.lower().endswith(thread_extensions) for path in files):
+            pool = ThreadPoolExecutor(max_workers=max_workers)
+            scan = partial(Subtitle.read_duration, check_cancel=self._check_cancel)
+        else:
+            pool = ProcessPoolExecutor(max_workers=max_workers, mp_context=worker_process_context())
+            scan = Subtitle.read_duration
+        with pool as executor:
+            futures = {executor.submit(scan, path): path for path in files}
+            total = len(futures)
+            for done, future in enumerate(as_completed(futures), 1):
+                if self.cancel_event.is_set():
+                    for pending in futures:
+                        pending.cancel()
+                    raise TaskCancelled()
+                path = futures[future]
+                try:
+                    durations[path] = future.result()
+                except TaskCancelled:
+                    raise
+                except Exception as error:
+                    print(f'{translate_text("Failed to load subtitle file ｢")}{path}｣: {error}')
+                self.label.emit(f'Parsing Subtitles {done}/{total}')
+                self.progress.emit(int(done / total * 700))
+        return durations

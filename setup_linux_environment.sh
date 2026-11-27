@@ -3674,7 +3674,7 @@ __bluray_python_imports_ok() {
 
 install_bluray_python_deps() {
   log "$(msg 'Installing application Python dependencies' '正在安装应用 Python 依赖')"
-  local -a python_packages=(numpy pycountry soundfile pillow PyQt6)
+  local -a python_packages=(numpy pycountry soundfile pillow PyQt6 setuptools)
   local -a pip_extra=(--only-binary=PyQt6,PyQt6-Qt6,PyQt6-sip)
   if "$package_build"; then
     python_packages+=(PyInstaller PyQt6-Qt6 PyQt6-sip)
@@ -3958,7 +3958,7 @@ elif ! "$package_build" || [[ -n "$(dpkg --audit)" ]] || ! apt-get check -s >/de
 fi
 
 sys_deps=(
-  python3 python3-pip python3-venv cmake ninja-build git ccache
+  python3 python3-pip python3-venv build-essential cmake ninja-build git ccache
   curl wget unzip fonts-wqy-microhei flac
   libegl1 libopengl0 libglib2.0-0 libglib2.0-bin libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libx11-6
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
@@ -4005,6 +4005,9 @@ fi
 
 select_vapoursynth_python
 install_bluray_python_deps
+if ! "$package_build"; then
+  "$VAPOURSYNTH_PYTHON" -B "$SETUP_ROOT/tools/build_ass_extension.py"
+fi
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
 declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [mpv-ffmpeg]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2 [ispc]=2 [vs-nlm-ispc]=3)
 if [[ "$APT_ARCH" == arm64 ]]; then linux_recipe_revisions[sangnom]=2; fi

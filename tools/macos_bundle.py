@@ -302,7 +302,7 @@ def application(ctx, app):
     for name in ("src", "resource"):
         shutil.copytree(
             ROOT / name, project / name, copy_function=shutil.copyfile,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "mpv"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "mpv", "ass_native.c", "ass2sup_native.c"),
         )
     for name in ("config.default.json", "LICENSE"):
         shutil.copyfile(ROOT / name, project / name)

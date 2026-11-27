@@ -86,13 +86,14 @@ from ...exports.utils import (
     print_terminal_line,
     system_tool_environment,
 )
-from ...vs_tools.getnative import format_getnative_progress, getnative as auto_getnative
+from ...vs_tools.getnative import format_getnative_progress, getnative_batch as auto_getnative_batch
 
 MIGRATE_METHODS = ['encode_task']
 KEEP_GETNATIVE_ARTIFACTS = bool(str(os.getenv("BLURAYSUB_KEEP_GETNATIVE_ARTIFACTS", "") or "").strip() == "1")
-# Each sample owns a memory-heavy VapourSynth analysis process, so concurrency is bounded by both a hard cap and
-# a conservative working-set estimate after reserving memory for the operating system and GUI.
+# Bound the extracted samples and their VapourSynth working sets after reserving
+# memory for the operating system and GUI.
 GETNATIVE_MAX_PARALLEL_SAMPLES = 20
+GETNATIVE_SAMPLES_PER_WORKER = 4
 GETNATIVE_ESTIMATED_SAMPLE_MEMORY_BYTES = 800 * 1024**2
 GETNATIVE_MEMORY_RESERVE_BYTES = 2 * 1024**3
 _ENCODE_CANCEL_EVENT: ContextVar[Optional[threading.Event]] = ContextVar(
@@ -765,155 +766,154 @@ def _write_vpy_video_source_a(vpy_path: str, video_path: str) -> bool:
     return True
 
 
-def _estimate_native_from_image_worker(
-    image_path: str,
+def _run_getnative_batch(image_progress, height_range, vspipe_path, plugin_path, threads):
+    lo, hi = height_range
+    options = {
+        "src_heights": list(range(lo, hi + 1)),
+        "plugin_path": plugin_path,
+        "threads": threads,
+    }
+    directory = Path(vspipe_path).resolve().parent
+    private_runtime = directory / "python-runtime.ini"
+    if sysconfig.get_platform() != "win-arm64" or not private_runtime.is_file():
+        return auto_getnative_batch(image_progress, **options)
+
+    # A Classic installation on ARM64 supplies a private x64 interpreter.
+    configuration = ConfigParser(interpolation=None)
+    configuration.read(private_runtime, encoding="utf-8-sig")
+    home = configuration.get("Python", "Home", fallback="")
+    python = directory / home / "python.exe"
+    if not home or not python.is_file():
+        raise FileNotFoundError(translate_text("VapourSynth's x64 Python runtime is missing. Run Windows setup."))
+    root = Path(__file__).resolve().parents[3]
+    command = (
+        "import json, sys; sys.path.insert(0, sys.argv[1]); "
+        "from src.vs_tools.getnative import getnative_batch; "
+        "print(json.dumps(getnative_batch(json.loads(sys.argv[2]), **json.loads(sys.argv[3]))))"
+    )
+    environment = dict(os.environ)
+    for key in ("PYTHONHOME", "PYTHONPATH"):
+        environment.pop(key, None)
+    result = run_command(
+        [str(python), "-I", "-c", command, str(root), json.dumps(image_progress), json.dumps(options)],
+        env=environment, capture_output=True, encoding="utf-8", errors="replace",
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or str(result.returncode))
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+def _estimate_native_from_images_worker(
+    image_progress: dict[str, Optional[str]],
     debug_dir: Optional[str],
-    progress_jsonl: Optional[str] = None,
     *,
     vspipe_path: Optional[str] = None,
     plugin_path: Optional[str] = None,
-) -> dict:
-    debug_out_dir = None
-    previous_progress_jsonl = os.environ.get("BLURAYSUB_GETNATIVE_PROGRESS_JSONL")
-    if progress_jsonl:
-        os.environ["BLURAYSUB_GETNATIVE_PROGRESS_JSONL"] = os.path.abspath(progress_jsonl)
-    try:
-        # Import the native runtime only after rejecting unusable image samples.
-        from PIL import Image
+    threads: int = 1,
+) -> dict[str, dict]:
+    from PIL import Image
 
-        with Image.open(image_path) as img:
-            h = int(img.height)
-            sample = img.convert("RGB")
-            # Match the metric's border exclusion before rejecting blank frames.
-            if sample.width > 10 and sample.height > 10:
-                sample = sample.crop((5, 5, sample.width - 5, sample.height - 5))
-            if all(low == high for low, high in sample.getextrema()):
-                return {
-                    "ok": True,
-                    "image": os.path.basename(image_path),
-                    "stage": "sample_quality",
-                    "skip_reason": "uniform_frame",
-                }
-        loader = "pil"
-        min_h = max(240, int(h * 0.40))
-        max_h = min(h - 2, int(h * 0.98))
-        if min_h >= max_h:
-            return {
-                "ok": False,
-                "image": os.path.basename(image_path),
-                "stage": "range",
-                "error": f"invalid height search range - min_h={min_h}, max_h={max_h}, src_h={h}",
-            }
+    results: dict[str, dict] = {}
+    groups: dict[tuple[int, int, int, int], dict[str, Optional[str]]] = {}
+    debug_paths = []
 
-        try:
-            if debug_dir:
-                os.makedirs(debug_dir, exist_ok=True)
-                base = os.path.splitext(os.path.basename(image_path))[0]
-                cand = os.path.join(debug_dir, base)
-                if os.path.exists(cand):
-                    k = 1
-                    while True:
-                        cand2 = os.path.join(debug_dir, f"{base}_{k}")
-                        if not os.path.exists(cand2):
-                            cand = cand2
-                            break
-                        k += 1
-                os.makedirs(cand, exist_ok=True)
-                meta = {
-                    "image": os.path.basename(image_path),
-                    "range": [int(min_h), int(max_h)],
-                    "loader": loader,
-                    "src_h": int(h),
-                }
-                with open(os.path.join(cand, "meta.json"), "w", encoding="utf-8") as f:
-                    json.dump(meta, f, ensure_ascii=False, indent=2)
-                debug_out_dir = cand
-        except Exception:
-            debug_out_dir = None
-
-        def _run_getnative_in_range(lo: int, hi: int) -> tuple[float, str, float, dict]:
-            options = dict(
-                src_heights=tuple(range(lo, hi + 1)), debug_dir=debug_out_dir,
-                fast_mode=True, score_quit=0.0, min_kernels=16, max_kernels=16, consensus_quit=False,
-                plugin_path=tool_path("PLUGIN_PATH") if plugin_path is None else plugin_path,
-            )
-            directory = Path(tool_path("VSPIPE_PATH") if vspipe_path is None else vspipe_path).resolve().parent
-            private_runtime = directory / "python-runtime.ini"
-            if sysconfig.get_platform() == "win-arm64" and private_runtime.is_file():
-                # A Classic installation on ARM64 supplies a private x64 interpreter.
-                configuration = ConfigParser(interpolation=None)
-                configuration.read(private_runtime, encoding="utf-8-sig")
-                home = configuration.get("Python", "Home", fallback="")
-                python = directory / home / "python.exe"
-                if not home or not python.is_file():
-                    raise FileNotFoundError(translate_text("VapourSynth's x64 Python runtime is missing. Run Windows setup."))
-                root = Path(__file__).resolve().parents[3]
-                command = (
-                    "import json, sys; sys.path.insert(0, sys.argv[1]); "
-                    "from src.vs_tools.getnative import getnative; "
-                    "print(json.dumps(getnative(sys.argv[2], **json.loads(sys.argv[3]))))"
-                )
-                environment = dict(os.environ)
-                for key in ("PYTHONHOME", "PYTHONPATH"):
-                    environment.pop(key, None)
-                result = run_command(
-                    [str(python), "-I", "-c", command, str(root), image_path, json.dumps(options)],
-                    env=environment, capture_output=True, encoding="utf-8", errors="replace",
-                )
-                if result.returncode:
-                    raise RuntimeError(result.stderr.strip() or result.stdout.strip() or str(result.returncode))
-                out0 = json.loads(result.stdout.splitlines()[-1])
-            else:
-                out0 = auto_getnative(image_path, **options)
-            if isinstance(out0, dict):
-                props0 = dict(out0)
-            elif hasattr(out0, "get_frame"):
-                props0 = dict(out0.get_frame(0).props)
-            else:
-                raise TypeError(f"unsupported getnative return type: {type(out0).__name__}")
-            kernel0 = props0.get("getnative_kernel", "")
-            if isinstance(kernel0, bytes):
-                kernel0 = kernel0.decode("utf-8", errors="ignore")
-            return (
-                float(props0.get("getnative_height", 0.0)),
-                str(kernel0),
-                float(props0.get("getnative_score", 0.0)),
-                dict(props0),
-            )
-
-        native_h, kernel, score, props = _run_getnative_in_range(min_h, max_h)
-        curve_valid = int(props.get("getnative_curve_valid", 1))
-        edge_hit = int(props.get("getnative_edge_hit", 0))
-        dec_ratio = float(props.get("getnative_decreasing_ratio", 0.0))
-
-        return {
-            "ok": True,
-            "height": native_h,
-            "kernel": kernel,
-            "score": score,
-            "image": os.path.basename(image_path),
-            "stage": "done",
-            "range": [min_h, max_h],
-            "loader": loader,
-            "curve_valid": curve_valid,
-            "edge_hit": edge_hit,
-            "decreasing_ratio": dec_ratio,
-        }
-    except Exception as e:
-        return {
+    def record_failure(image, error):
+        results[image] = {
             "ok": False,
-            "image": os.path.basename(image_path),
+            "image": os.path.basename(image),
             "stage": "run_getnative",
-            "error": f"{type(e).__name__} - {e}",
+            "error": f"{type(error).__name__} - {error}",
             "traceback": traceback.format_exc(limit=8),
         }
+
+    def analyze(samples, height_range):
+        try:
+            detected = _run_getnative_batch(
+                samples, height_range,
+                tool_path("VSPIPE_PATH") if vspipe_path is None else vspipe_path,
+                tool_path("PLUGIN_PATH") if plugin_path is None else plugin_path,
+                threads,
+            )
+            results.update({
+                image: {
+                    "ok": True,
+                    "image": os.path.basename(image),
+                    "height": float(detected[image]["getnative_height"]),
+                    "kernel": str(detected[image]["getnative_kernel"]),
+                    "score": float(detected[image]["getnative_score"]),
+                    "stage": "done",
+                    "range": list(height_range),
+                    "loader": "pil",
+                    "curve_valid": int(detected[image]["getnative_curve_valid"]),
+                    "edge_hit": int(detected[image]["getnative_edge_hit"]),
+                    "decreasing_ratio": float(detected[image]["getnative_decreasing_ratio"]),
+                }
+                for image in samples
+            })
+        except Exception as error:
+            if len(samples) == 1:
+                record_failure(next(iter(samples)), error)
+            else:
+                # Isolate an unreadable sample or plugin that rejects a shared graph.
+                for image, progress in samples.items():
+                    analyze({image: progress}, height_range)
+
+    try:
+        for image, progress in image_progress.items():
+            name = os.path.basename(image)
+            try:
+                with Image.open(image) as img:
+                    width, height = img.size
+                    sample = img.convert("RGB")
+                    # Apply the metric's border exclusion to this blank-frame check.
+                    if width > 10 and height > 10:
+                        sample = sample.crop((5, 5, width - 5, height - 5))
+                    uniform = all(low == high for low, high in sample.getextrema())
+                if uniform:
+                    results[image] = {"ok": True, "image": name, "stage": "sample_quality", "skip_reason": "uniform_frame"}
+                    continue
+                lo = max(240, int(height * 0.40))
+                hi = min(height - 2, int(height * 0.98))
+                if lo >= hi:
+                    results[image] = {
+                        "ok": False,
+                        "image": name,
+                        "stage": "range",
+                        "error": f"invalid height search range - min_h={lo}, max_h={hi}, src_h={height}",
+                    }
+                    continue
+                groups.setdefault((width, height, lo, hi), {})[image] = progress
+            except Exception as error:
+                record_failure(image, error)
+                continue
+
+            if debug_dir:
+                try:
+                    os.makedirs(debug_dir, exist_ok=True)
+                    base = os.path.join(debug_dir, os.path.splitext(name)[0])
+                    path = base
+                    index = 1
+                    while True:
+                        try:
+                            os.mkdir(path)
+                            break
+                        except FileExistsError:
+                            path = f"{base}_{index}"
+                            index += 1
+                    debug_paths.append(path)
+                    meta = {"image": name, "range": [lo, hi], "loader": "pil", "src_h": height}
+                    with open(os.path.join(path, "meta.json"), "w", encoding="utf-8") as stream:
+                        json.dump(meta, stream, ensure_ascii=False, indent=2)
+                except OSError:
+                    pass
+
+        for (_, _, lo, hi), samples in groups.items():
+            analyze(samples, (lo, hi))
     finally:
-        if previous_progress_jsonl is None:
-            os.environ.pop("BLURAYSUB_GETNATIVE_PROGRESS_JSONL", None)
-        else:
-            os.environ["BLURAYSUB_GETNATIVE_PROGRESS_JSONL"] = previous_progress_jsonl
-        if debug_out_dir and not KEEP_GETNATIVE_ARTIFACTS:
-            shutil.rmtree(debug_out_dir, ignore_errors=True)
+        if not KEEP_GETNATIVE_ARTIFACTS:
+            for path in debug_paths:
+                shutil.rmtree(path, ignore_errors=True)
+    return results
 
 
 def _getnative_result_weight(row: dict) -> float:
@@ -1187,8 +1187,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         f'{self.t("[BluraySubtitle] getnative sample begin ")}{idx}/{len(batch)} - {os.path.basename(image)}'
                     )
 
-                max_workers = len(batch)
-                future_to_image: dict = {}
+                group_count = (len(batch) + GETNATIVE_SAMPLES_PER_WORKER - 1) // GETNATIVE_SAMPLES_PER_WORKER
+                sample_groups = [batch[index::group_count] for index in range(group_count)]
+                future_to_group: dict = {}
                 recorded_images: set[str] = set()
                 progress_files: dict[str, str] = {}
                 progress_positions: dict[str, int] = {}
@@ -1244,18 +1245,18 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
                 try:
                     with ProcessPoolExecutor(
-                            max_workers=max_workers, mp_context=worker_process_context(),
+                            max_workers=group_count, mp_context=worker_process_context(),
                     ) as executor:
-                        for image in batch:
+                        for images in sample_groups:
                             future = executor.submit(
-                                _estimate_native_from_image_worker,
-                                image,
+                                _estimate_native_from_images_worker,
+                                {image: progress_files[image] for image in images},
                                 GETNATIVE_DEBUG_DIR,
-                                progress_files[image],
+                                threads=len(images),
                                 **getnative_paths,
                             )
-                            future_to_image[future] = image
-                        pending = set(future_to_image)
+                            future_to_group[future] = images
+                        pending = set(future_to_group)
                         while pending:
                             for message in _read_getnative_progress_messages(
                                 progress_files,
@@ -1273,17 +1274,21 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             ):
                                 _emit_encode_log_line(message)
                             for future in completed:
-                                image = future_to_image[future]
+                                images = future_to_group[future]
                                 try:
-                                    result = future.result() or {}
+                                    results = future.result()
                                 except Exception as e:
-                                    result = {
-                                        "ok": False,
-                                        "image": os.path.basename(image),
-                                        "stage": "worker_process",
-                                        "error": f"{type(e).__name__} - {e}",
+                                    results = {
+                                        image: {
+                                            "ok": False,
+                                            "image": os.path.basename(image),
+                                            "stage": "worker_process",
+                                            "error": f"{type(e).__name__} - {e}",
+                                        }
+                                        for image in images
                                     }
-                                record_sample_result(image, result)
+                                for image in images:
+                                    record_sample_result(image, results[image])
                         for message in _read_getnative_progress_messages(
                             progress_files,
                             progress_positions,
@@ -1294,9 +1299,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         f'{self.t("[BluraySubtitle] getnative - multiprocessing unavailable, fallback to single process ")}'
                         f'({type(e).__name__} - {e})'
                     )
-                    for image in (candidate for candidate in batch if candidate not in recorded_images):
-                        result = _estimate_native_from_image_worker(image, GETNATIVE_DEBUG_DIR, **getnative_paths) or {}
-                        record_sample_result(image, result)
+                    for images in sample_groups:
+                        remaining = {image: None for image in images if image not in recorded_images}
+                        if remaining:
+                            results = _estimate_native_from_images_worker(
+                                remaining, GETNATIVE_DEBUG_DIR, threads=len(remaining), **getnative_paths,
+                            )
+                            for image, result in results.items():
+                                record_sample_result(image, result)
                 _emit_encode_log_line(
                     f'{self.t("[BluraySubtitle] getnative round complete: ")}'
                     f'{self.t("evaluated_total=")}{evaluated}, '

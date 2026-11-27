@@ -14,6 +14,7 @@ import sysconfig
 import tempfile
 
 from src.core.version import BUILD_COMMIT_FILENAME, FREEBSD_PACKAGE_ARCHIVE as ARCHIVE, git_commit_record, parse_commit_record
+from tools.build_ass_extension import build_ass_extension
 from tools.freebsd_build import LOCAL, PYTHON_SITE, PYTHON_VERSION, PLUGIN_NAMESPACES, ROOT
 from tools.macos_build_support import copy, digest, download, output
 from tools.mpv import install as mpv_config
@@ -312,6 +313,7 @@ def stage_mpv(ctx, runtime):
 def stage_runtime(ctx, runtime, sources, recipe):
     owners = set()
     copy_python(ctx, runtime, owners)
+    build_ass_extension(runtime / "python" / PYTHON_SITE)
     copy_native(ctx, runtime, owners)
     compatibility = relocate(ctx, runtime, owners)
     shutil.copytree(ctx.prefix / "legal", runtime / "legal")
@@ -332,7 +334,8 @@ def stage_application(runtime, record):
     app = runtime / "app"
     app.mkdir()
     for directory in ("src", "resource"):
-        shutil.copytree(ROOT / directory, app / directory, ignore=shutil.ignore_patterns(*EXCLUDED_PYTHON))
+        shutil.copytree(ROOT / directory, app / directory,
+                        ignore=shutil.ignore_patterns(*EXCLUDED_PYTHON, "ass_native.c", "ass2sup_native.c"))
     copy(ROOT / "config.default.json", app / "config.default.json")
     copy(ROOT / "tools/freebsd_entry.py", app / "entry.py")
     (runtime / BUILD_COMMIT_FILENAME).write_text(record, encoding="utf-8")

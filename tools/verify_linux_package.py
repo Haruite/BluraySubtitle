@@ -13,6 +13,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.build_ass_extension import VERIFY_ASS_EXTENSION
 from tools.linux_runtime_libs import kernel_requirement
 from tools.mpv.install import LAZY_MENU, SHADER_PATH, SHADERS
 from tools.mpv.vapoursynth.rife_assets import RIFE_FILES
@@ -91,6 +92,8 @@ def verify_gui_branches(bundle: Path, work: Path, env: dict[str, str]) -> None:
 def verify(bundle: Path, work: Path) -> None:
     verify_native_binaries(bundle)
     support = bundle / "_internal"
+    if len(list(support.glob("_bluraysubtitle_ass*.so"))) != 1:
+        raise RuntimeError("Expected one bundled ASS extension")
     settings_source = support / "src/core/settings.py"
     compile(settings_source.read_text(encoding="utf-8"), str(settings_source), "exec")
     legal = support / "legal"
@@ -152,6 +155,8 @@ def verify(bundle: Path, work: Path) -> None:
     verify_gui_branches(bundle, work, env)
     subprocess.run(
         [native / "python/bin/python3", "-c",
+         f"import sys\nsys.path.insert(0, {str(support)!r})\n"
+         + VERIFY_ASS_EXTENSION + "\n"
          "import vapoursynth as vs\n"
          "clip = vs.core.std.BlankClip(width=64, height=32, format=vs.GRAY8, color=[71])\n"
          "assert bytes(clip.zsmooth.RemoveGrain(mode=[1]).get_frame(0)[0])[0] == 71"],

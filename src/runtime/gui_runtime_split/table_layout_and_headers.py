@@ -143,6 +143,10 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
         table.setProperty('columnKeys', list(keys))
+        if table is getattr(self, 'table2', None) and keys == SUBTITLE_LABELS:
+            # The shared header keeps hidden sections by logical index across page switches.
+            for column in range(table.columnCount()):
+                table.showColumn(column)
         self._apply_encode_device_column_visibility(table)
         disc_table = table is getattr(self, 'table1', None)
         sp_selection_row = getattr(self, '_sp_selection_row', None)

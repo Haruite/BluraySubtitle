@@ -1401,20 +1401,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                 detail, []
                             ).append(main_path)
 
-            def _provider_streams(mpls_path: str) -> list[dict[str, object]]:
-                rows: list[dict[str, object]] = []
-                for source_row in self._read_mpls_track_info(mpls_path):
-                    row = dict(source_row)
-                    row['_mpls_source_path'] = os.path.normpath(mpls_path)
-                    row['_mpls_selection_key'] = BluraySubtitle._mpls_track_selection_key(
-                        mpls_path,
-                        str(row.get('_mpls_bucket') or row.get('codec_type') or ''),
-                        int(row.get('_mpls_slot_index') or 0),
-                    )
-                    row['index'] = row['_mpls_selection_key']
-                    rows.append(row)
-                return rows
-
             def _physical_track_signature(row: dict[str, object]) -> tuple[tuple[str, int], ...]:
                 return BluraySubtitle._mpls_track_mapping_signature(row)
 
@@ -1434,7 +1420,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     info = {
                         'main_path': os.path.normpath(main_path),
                         'mpls_paths': [],
-                        'streams': _provider_streams(main_path),
+                        'streams': self._main_mpls_track_rows(main_path),
                     }
                     whole_main_track_info[main_norm] = info
                 alternate_path = os.path.normpath(str(alternate_chapter.file_path))
@@ -1445,7 +1431,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     for row in info['streams']
                     if _physical_track_signature(row)
                 ]
-                for row in _provider_streams(alternate_chapter.file_path):
+                for row in self._main_mpls_track_rows(alternate_chapter.file_path):
                     signature = _physical_track_signature(row)
                     if _has_relation_collision(signature, signatures):
                         continue
@@ -1463,11 +1449,11 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 """
                 main_signatures = [
                     _physical_track_signature(row)
-                    for row in _provider_streams(main_path)
+                    for row in self._main_mpls_track_rows(main_path)
                     if str(row.get('codec_type') or '').strip().lower()
                     in ('audio', 'subtitle', 'subtitles')
                 ]
-                for row in _provider_streams(attachment_chapter.file_path):
+                for row in self._main_mpls_track_rows(attachment_chapter.file_path):
                     if (
                             str(row.get('codec_type') or '').strip().lower()
                             not in ('audio', 'subtitle', 'subtitles')

@@ -17,6 +17,7 @@ from src.core.tool_paths import (
     MKVTOOLNIX_TOOLS, TOOL_DIRECTORY_NAMES, default_mpv_config_directory, portable_runtime_paths, resolve_tool_paths,
 )
 from src.core.version import git_commit_record
+from tools.build_ass_extension import SOURCES as ASS_EXTENSION_SOURCES
 from tools.freebsd_build import FreeBSDBuild, ROOT, build_source_tools
 from tools.freebsd_bundle import ARCHIVE, archive, stage_application, stage_runtime
 from tools.macos_build_support import digest, fingerprint, message, output
@@ -28,6 +29,7 @@ def runtime_recipe():
     files = [ROOT / "setup_freebsd_environment.sh", ROOT / "LICENSE", ROOT / "tools/macos_build_support.py",
              ROOT / "tools/macos_media.py", ROOT / "tools/lsmash_ffmpeg_compat.py",
              ROOT / "tools/macos_python_runtime.py", ROOT / "tools/update_third_party_notices.py",
+             ROOT / "tools/build_ass_extension.py", *ASS_EXTENSION_SOURCES,
              ROOT / "tools/vapoursynth_plugin_releases.py", ROOT / "tools/vapoursynth_plugin_versions.py"]
     for pattern in ("tools/freebsd_*", "tools/launch_freebsd_*", "tools/mpv/**/*", "legal/freebsd/*",
                     "third_party/vapoursynth_scripts/**/*", "third_party/mpv_lazy_shaders/**/*", "resource/mpv/*"):

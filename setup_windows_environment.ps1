@@ -5311,6 +5311,14 @@ function Invoke-WindowsSetup {
         Install-VapourSynthUpstreamComponents
         Install-VapourSynthScripts
     }
+    if ($Mode -eq "Desktop" -and (Test-VisualStudioBuildTools)) {
+        Invoke-VisualStudioBuild {
+            Invoke-SetupBuildCommand `
+                -DisplayName (Get-SetupText "ASS subtitle acceleration" "ASS 字幕加速") `
+                -FilePath $script:ToolPaths.Python `
+                -Arguments @("-B", (Join-Path $script:SetupDirectory "tools/build_ass_extension.py"))
+        }
+    }
     if ($Mode -eq "Build") {
         $script:Manifest.system.python_executable = $script:ToolPaths.Python
         $script:Manifest.system.seven_zip_executable = $script:ToolPaths.SevenZip

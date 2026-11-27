@@ -155,7 +155,7 @@ def download_source(url: str, destination: Path) -> None:
 
 def prepare_qt(work: Path, python: Path, seven_zip: Path) -> None:
     # This PyQt6 series uses the Qt 6.8 ABI. Install its bindings without the stock Qt wheel.
-    pip(python, "install", "--only-binary=:all:", "pefile", "PyQt6-sip", "PyInstaller", "Pillow",
+    pip(python, "install", "--only-binary=:all:", "pefile", "PyQt6-sip", "PyInstaller", "setuptools", "Pillow",
         "numpy", "SoundFile", "pycountry")
     pip(python, "install", "--only-binary=:all:", "--no-deps", "PyQt6==6.8.1")
     release = github_release("crystalidea/qt6windows7", f"v{WIN7_QT_VERSION}")

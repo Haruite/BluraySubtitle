@@ -1,5 +1,6 @@
 lang/python3
 py-pip
+py-setuptools
 py-meson-python
 py-cython
 py-cffi

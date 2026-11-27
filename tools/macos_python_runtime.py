@@ -8,7 +8,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from tools.macos_build_support import copy
+from tools.build_ass_extension import SOURCES as ASS_EXTENSION_SOURCES
+from tools.macos_build_support import ROOT, copy, digest
 
 PYLIB = Path(f"python/lib/python{sys.version_info.major}.{sys.version_info.minor}")
 SITE = PYLIB / "site-packages"
@@ -201,6 +202,15 @@ def build_python(ctx, versions):
         lambda w, s: install_python(ctx, s),
         scope="python",
         recipe=recipe_digest(install_python),
+    )
+    ass_builder = ROOT / "tools/build_ass_extension.py"
+    ctx.component(
+        "ass-extension",
+        [digest(path) for path in (ass_builder, *ASS_EXTENSION_SOURCES)],
+        lambda _, stage: ctx.run(sys.executable, "-B", ass_builder, "--output", stage / SITE),
+        scope="python",
+        build_tools=("setuptools",),
+        python_abi=True,
     )
     archive = versions["vapoursynth"]
     ctx.component(

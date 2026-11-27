@@ -11,8 +11,11 @@ import unittest
 from contextlib import chdir
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.domain import Subtitle
+from src.domain.subtitles import ass_model
+from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle  # Import the composed service before its split mixins.
 from src.runtime.services_split.subtitle_and_chapter_pipeline import SubtitleChapterPipelineMixin
 
@@ -52,6 +55,91 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
         ]))
         self.assertEqual(subtitle.max_end_time(), 600.0)
 
+    def test_ass_duration_and_merge_preserve_reordered_event_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source.ass'
+            source.write_text(
+                '[Script Info]\nTitle: Test\n[V4+ Styles]\nFormat: Name, Fontname\n'
+                'Style: Default,Arial\n[Events]\nFormat: Layer, End, Start, Style, copy, Text\n'
+                'Dialogue: 0,0:00:05.25,0:00:04.00,Default,tag,First, with a comma\n'
+                'Comment: 0,0:00:01.00,0:00:00.00,Default,tag,Earlier event\n',
+                encoding='utf-16',
+            )
+            subtitle = Subtitle(str(source))
+            self.assertEqual(Subtitle.read_duration(str(source)), 5.25)
+            self.assertEqual(subtitle.max_end_time(), 5.25)
+
+            merged = subtitle.clone()
+            merged.append_subtitle(subtitle, 7.0)
+            merged.dump(str(root / 'disc'), str(root / 'playlist'))
+
+            output = root / 'disc.ass'
+            self.assertEqual(output.read_bytes(), (root / 'playlist.ass').read_bytes())
+            self.assertEqual(subtitle.max_end_time(), 5.25)
+            self.assertEqual(Subtitle.read_duration(str(output)), 12.25)
+            self.assertIn('Default,tag,First, with a comma', output.read_text(encoding='utf-8-sig'))
+
+    @unittest.skipUnless(ass_model.ass_native, 'ASS extension is unavailable')
+    def test_native_ass_matches_fallback_for_mixed_rows_and_shifted_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / 'one.ass', root / 'two.ass'
+            header = (
+                '[Script Info]\nTitle: Test\n[V4+ Styles]\nFormat: Name, Fontname\n'
+                'Style: Default,{font}\n[Events]\n'
+                'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+            )
+            first.write_text(
+                header.format(font='Arial') +
+                'Comment: 0,0:00:00.00,0:00:01.23,Default,,0,0,0,,Leading comment\n'
+                'Dialogue: 0,0:00:01.00,0:00:03.45,Default,,0,0,0,,  Text, \\u5b57 \\U0001F642  \n',
+                encoding='utf-8-sig',
+            )
+            second.write_text(
+                header.format(font='Verdana') +
+                'Dialogue: 0,0.125,4.56789,Default,,0,0,0,,Nonstandard timestamp\n'
+                '; ignored\n'
+                'Dialogue: 0,0:00:08.00,0:00:09.25,Default,,0,0,0,,Later line\n'
+                '[Aegisub Project Garbage]\nLast Style Storage: Default\n',
+                encoding='utf-16',
+            )
+
+            def merge(name):
+                native_first, native_second = Subtitle(str(first)), Subtitle(str(second))
+                merged = native_first.clone().shift(-0.003)
+                merged.append_subtitle(native_second, 86400.010025)
+                merged.content.delete_lines.add(0)
+                merged.dump(str(root / name))
+                return ((root / (name + '.ass')).read_bytes(),
+                        [Subtitle.read_duration(str(p)) for p in (first, second)])
+
+            with patch.object(ass_model, '_EVENT_BATCH_SIZE', 2):
+                actual, durations = merge('native')
+            with patch.object(ass_model, 'ass_native', None):
+                expected, reference = merge('python')
+            self.assertEqual(actual, expected)
+            self.assertEqual(durations, reference)
+            self.assertEqual(durations, [3.45, 9.25])
+
+    def test_cancelled_ass_dump_removes_both_partial_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source.ass'
+            source.write_text(
+                '[Script Info]\n[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n'
+                '[Events]\nFormat: Start, End, Style, Text\n'
+                'Dialogue: 0:00:01.00,0:00:02.00,Default,Test\n',
+                encoding='utf-8',
+            )
+
+            def cancel():
+                raise TaskCancelled()
+
+            with self.assertRaises(TaskCancelled):
+                Subtitle(str(source)).dump(str(root / 'disc'), str(root / 'playlist'), check_cancel=cancel)
+            self.assertEqual(list(root.glob('*.ass')), [source])
+
     def test_completion_preserves_unowned_files_in_the_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory, chdir(temporary_directory):
             paths = [Path(name) for name in ('chapter.txt', 'mkvinfo.txt', 'info.json', '.meta')]
@@ -84,6 +172,30 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
             self.assertEqual((root / '00001.en.sup').read_bytes(), expected)
             with self.assertRaises(FileExistsError):
                 merged.dump(folder_base, playlist_base)
+
+    def test_sup_timing_and_cut_preserve_payloads_and_wrapped_dts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source.sup'
+
+            def packet(pts, dts, payload=b'\\x00\\xff'):
+                return struct.pack('>2sIIBH', b'PG', pts, dts, 0x15, len(payload)) + payload
+
+            first = packet(90000, 0)
+            second = packet(180000, 135000, b'graphics')
+            distant = packet(500 * 90000, 0)
+            valid = first + second + distant + distant + packet(18000 * 90000, 0)
+            source.write_bytes(valid + b'PG\\x00')
+            self.assertEqual(Subtitle.read_duration(str(source)), 2.0)
+            subtitle = Subtitle(str(source))
+            merged = subtitle.clone()
+            merged.content.cut_pgs(1.0, 2.0)
+            merged.dump(str(root / 'cut'))
+            subtitle.dump(str(root / 'uncut'))
+            self.assertEqual((root / 'uncut.sup').read_bytes(), valid)
+            self.assertEqual((root / 'cut.sup').read_bytes(),
+                             packet(0, 0xFFFFFFFF - 89999) + packet(90000, 45000, b'graphics'))
+            self.assertEqual(Subtitle.read_duration(str(root / 'cut.sup')), 1.0)
 
     def test_series_merge_writes_one_output_pair_after_mapping_all_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

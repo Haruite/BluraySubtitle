@@ -54,6 +54,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         if not subtitle_files:
             raise ValueError(translate_text('Subtitle file is not selected'))
 
+        def check_cancel():
+            if cancel_event and cancel_event.is_set():
+                raise TaskCancelled()
+
         self._progress(text='Loading Subtitles')
         self._preload_subtitles(subtitle_files, cancel_event=cancel_event)
         suffix = str(subtitle_suffix or '')
@@ -117,8 +121,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             output_folder_base = ''
             output_mpls_base = ''
             for subtitle_index, (subtitle_path, row) in enumerate(zip(subtitle_files, configuration_rows)):
-                if cancel_event and cancel_event.is_set():
-                    raise TaskCancelled()
+                check_cancel()
                 self._progress(
                     int((subtitle_index + 1) / len(subtitle_files) * 700),
                     f'Merging {subtitle_index + 1}/{len(subtitle_files)}',
@@ -130,14 +133,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 if current_playlist != playlist_key:
                     if merged_subtitle is not None:
                         output_jobs.append((merged_subtitle, output_folder_base, output_mpls_base))
-                    merged_subtitle = parsed_subtitle.clone().shift(offset_seconds)
+                    merged_subtitle = parsed_subtitle.clone().shift(offset_seconds, check_cancel=check_cancel)
                     current_playlist = playlist_key
                 else:
                     if merged_subtitle.output_extension() != parsed_subtitle.output_extension():
                         raise ValueError(translate_text(
                             'Subtitle formats cannot be mixed within one merged output'
                         ))
-                    merged_subtitle.append_subtitle(parsed_subtitle, offset_seconds)
+                    merged_subtitle.append_subtitle(parsed_subtitle, offset_seconds, check_cancel=check_cancel)
                 output_folder_base, output_mpls_base = output_bases(
                     str(row['folder']), selected_mpls_no_ext, playlist_rows,
                 )
@@ -165,13 +168,12 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 output_paths.append(output_path)
 
         for output_index, (merged_subtitle, folder_base, mpls_base) in enumerate(output_jobs, start=1):
-            if cancel_event and cancel_event.is_set():
-                raise TaskCancelled()
+            check_cancel()
             self._progress(
                 700 + int(output_index / len(output_jobs) * 300),
                 f'Writing Subtitle File {output_index}/{len(output_jobs)}',
             )
-            merged_subtitle.dump(folder_base, mpls_base)
+            merged_subtitle.dump(folder_base, mpls_base, check_cancel=check_cancel)
         self._progress(1000, 'Done')
         return output_paths
 

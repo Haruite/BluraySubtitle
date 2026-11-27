@@ -1507,3 +1507,25 @@ Windows x264, x265, and NVENC checks covered HDR10, HDR10+, HLG, and Dolby Visio
 The disc scanner retains the first PTS and duration of each referenced M2TS stream alongside the parsed chapters. The main output table reuses those readings for chapter-bounded ranges and derives the displayed clip names from the same range calculation. Episode rows, derived timing and remux commands use the existing cancellable GUI update queue before the SP scan starts.
 
 Four-volume Remux checks in WSL compared the contents of 24 main rows and 64 SP rows with the previous output and exercised cancellation and source replacement during table updates. The timing and scan regression tests passed.
+
+## Large ASS files and binary SUP processing
+
+2026-11-27 · Based on `00371eb`
+
+ASS and SSA scan workers return durations calculated from event timestamps. The optional CPython extension handles timing scans, event parsing, timestamp shifts, and batched serialization. The merge worker builds complete ASS models, copies event fields while sharing immutable values, and writes both destination copies from one serialization pass. The Python parser handles other timestamp spellings and source runs without the extension. Package builders compile and verify the extension with the target interpreter. SUP uses `struct` to read PGS headers and retains the compressed image data when shifting or cutting blocks. During append, it combines the two latest distinct timestamps from the retained and incoming blocks to apply the outlier rule without rescanning merged data. Windows and Ubuntu-26.04 WSL checks used 22 ASS files totaling 1.59 GiB, playlist-only Blu-ray folders, and two Blu-ray PGS tracks. The 23 subtitle rows and 18 ASS outputs matched the baseline after newline normalization for the output files, and the merged and cut SUP outputs matched byte for byte. Focused tests covered UTF-16, reordered ASS fields, cancellation cleanup, and wrapped PGS timestamps.
+
+## Native ASS-to-SUP image processing
+
+2026-11-27 · Based on `00371eb`
+
+The ASS-to-SUP converter composites and crops the libass mask chain, computes PGS palette opacity, and encodes scanline runs in the shared C extension. The default path passes encoded graphics from the render workers to the SUP writer. The BDN XML and PNG export remains available through `--keep-temp`. Each worker samples the first frame of its assigned range to preserve an active subtitle across range boundaries.
+
+Windows and Ubuntu-26.04 WSL checks converted the complete first episode of Shigatsu wa Kimi no Uso and compared the SUP bytes against the original image and packet algorithms with the same first-frame rule. Both platforms also exercised Blu-ray-compatible output with and without retained intermediate files.
+
+## Shared getnative coarse filters
+
+2026-11-27 · Based on `00371eb`
+
+Getnative workers group compatible samples and splice their luma clips for the coarse scan. Each kernel and candidate height uses one filter graph per group. The worker reads a separate error curve for each frame and uses it for that frame's fine scan and winning-kernel verification. Small groups and bounded frame requests limit the live graphs. A shared-graph failure triggers individual sample analysis.
+
+A Windows 1080p Blu-ray run took 450.5 seconds before the change and 357.9 seconds with grouping. All 20 sample records, the 288 kernel records, and the final resolution, kernel, and confidence agreed. Ubuntu-26.04 WSL checks compared the coarse and fine errors and the verification result for two original-disc frames with both shared and individual graphs.

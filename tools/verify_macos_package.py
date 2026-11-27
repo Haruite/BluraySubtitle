@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tools.build_ass_extension import VERIFY_ASS_EXTENSION
 from tools.macos_build_support import digest, message, run
 from tools.macos_macho import inspect_macho
 
@@ -142,6 +143,7 @@ def verify_runtime(runtime):
             "-I",
             "-B",
             "-c",
+            VERIFY_ASS_EXTENSION + "\n"
             "from concurrent.futures import ProcessPoolExecutor\n"
             "import numpy as np, soundfile as sf, psutil, pycountry\n"
             "from PIL import Image\n"

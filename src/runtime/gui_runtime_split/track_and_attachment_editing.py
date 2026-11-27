@@ -291,7 +291,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             if target_path == source_path:
                 # Source MPLS has already been saved from the dialog result.
                 continue
-            target_streams = self._read_mpls_track_info(target_path)
+            target_streams = self._main_mpls_track_rows(target_path)
             if not target_streams:
                 continue
 
@@ -304,7 +304,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             audio: list[str] = list(existing_sel.get('audio') or [])
             subtitle: list[str] = list(existing_sel.get('subtitle') or [])
             video: list[str] = [
-                str(stream.get('pid'))
+                str(stream['index'])
                 for stream in target_streams
                 if str(stream.get('codec_type') or '') == 'video'
                 and stream.get('_mpls_append_compatible') is not False
@@ -674,11 +674,24 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         return out
 
     def _read_mpls_track_info(self, mpls_path: str) -> list[dict[str, object]]:
-        """Read main-playlist rows from its STN; the persisted selection key is the PID."""
+        """Read track rows from the playlist's STN."""
         playlist = self._loaded_playlist(mpls_path)
         if playlist is not None:
             return playlist.tracks
         return BluraySubtitle._mpls_track_streams(mpls_path)
+
+    def _main_mpls_track_rows(self, mpls_path: str) -> list[dict[str, object]]:
+        """Use the same track identity for standalone and shared main playlists."""
+        source_path = os.path.normpath(mpls_path)
+        rows: list[dict[str, object]] = []
+        for stream in self._read_mpls_track_info(source_path):
+            key = BluraySubtitle._mpls_track_selection_key(
+                source_path,
+                str(stream.get('_mpls_bucket') or stream.get('codec_type') or ''),
+                int(stream.get('_mpls_slot_index') or 0),
+            )
+            rows.append({**stream, 'index': key, '_mpls_selection_key': key, '_mpls_source_path': source_path})
+        return rows
 
 
     def _read_mkvinfo_attachments(self, mkv_path: str) -> list[dict[str, str]]:
@@ -1616,8 +1629,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         return out
 
     def _default_track_lists_for_mpls_path(self, mpls_path: str) -> Optional[tuple[list[str], list[str]]]:
-        """Read one main MPLS and return default audio/subtitle PID selections."""
-        streams = self._read_mpls_track_info(mpls_path)
+        """Return the default logical audio and subtitle selections for one main MPLS."""
+        streams = self._main_mpls_track_rows(mpls_path)
         if not streams:
             return None
         pid_lang = self._pid_lang_from_streams(streams)
@@ -1858,7 +1871,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
     def on_edit_tracks_from_mpls(self, mpls_path: str):
         try:
             self._ensure_default_track_config_for_main(mpls_path)
-            streams = self._read_mpls_track_info(mpls_path)
+            streams = self._main_mpls_track_rows(mpls_path)
             # Only an alternate MPLS whose complete m2ts_detail equals this selected main may expose
             # additional PIDs in the shared main dialog. Single-episode SP append tracks stay separate.
             alternate_info = dict(
@@ -1902,8 +1915,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     audio.append(selection_id)
                 elif ctype in ('subtitle', 'subtitles'):
                     subtitle.append(selection_id)
-            # Values are PIDs grouped by type. Their list order is presentation-only and is
-            # deliberately ignored by the Service when it resolves MPLS-local track IDs.
+            # Resolve provider-qualified selections to PIDs when building the remux request.
             self._track_selection_config[key] = {
                 'video': video,
                 'audio': audio,

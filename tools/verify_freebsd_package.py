@@ -8,6 +8,10 @@ import sys
 import tarfile
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.build_ass_extension import VERIFY_ASS_EXTENSION
+
 
 def verify_runtime(runtime: Path, work: Path):
     tools = runtime / "bin"
@@ -27,6 +31,7 @@ def verify_runtime(runtime: Path, work: Path):
         return result.stdout
 
     manifest = json.loads((runtime / "runtime.json").read_bytes())
+    run("python3", "-I", "-B", "-c", VERIFY_ASS_EXTENSION)
     assert "Core R79" in run("vspipe", "--version")
     for tool in ("mkvmerge", "mkvinfo", "mkvextract", "mkvpropedit", "dovi_tool", "hdr10plus_tool", "x264", "mpv"):
         run(tool, "--version")

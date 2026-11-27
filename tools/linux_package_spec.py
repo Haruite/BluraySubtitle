@@ -17,6 +17,7 @@ if sysconfig.get_platform() != python_platform:
 
 sys.path.insert(0, str(PROJECT_ROOT))
 from src.core.version import BUILD_COMMIT_FILENAME, git_commit_record
+from tools.build_ass_extension import MODULE as ASS_MODULE, build_ass_extension
 
 
 root = PROJECT_ROOT
@@ -35,9 +36,11 @@ for source, destination in collect_data_files("pycountry", excludes=["locales/**
         source = str(output)
     pycountry_data.append((source, destination))
 
+ass_extension = build_ass_extension(Path(CONF["workpath"]) / "ass-extension")
 analysis = Analysis(
     [str(root / "src/main.py")],
     pathex=[str(root), str(vs_scripts)],
+    binaries=[(str(ass_extension), ".")],
     datas=[
         (str(root / "config.default.json"), "."),
         (str(build_commit), "."),
@@ -52,6 +55,7 @@ analysis = Analysis(
     runtime_hooks=[str(root / "tools/pyinstaller_hooks/linux_portable_runtime.py")],
     hookspath=[str(root / "tools/pyinstaller_hooks")],
     excludes=[
+        ASS_MODULE,  # The explicit binary above takes precedence over source-run builds.
         "PyQt6",  # The launcher selects a filesystem package before the first Qt import.
         "matplotlib",
         "tkinter",
@@ -79,6 +83,8 @@ def keep_runtime_entry(entry):
 
 
 analysis.binaries = [entry for entry in analysis.binaries if keep_runtime_entry(entry)]
+if not any(Path(source).resolve() == ass_extension for _, source, _ in analysis.binaries):
+    raise RuntimeError("PyInstaller did not collect the ASS extension for this build")
 analysis.datas = [entry for entry in analysis.datas if keep_runtime_entry(entry)]
 if apt_paths := os.environ.get("BLURAY_APT_CACHE_PATHS"):
     sources = {Path(entry[1]).resolve() for entry in (*analysis.binaries, *analysis.datas, *analysis.pure) if entry[1]}

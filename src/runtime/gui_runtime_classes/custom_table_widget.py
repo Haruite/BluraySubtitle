@@ -182,7 +182,8 @@ class TableCellDelegate(QStyledItemDelegate):
         if tooltip and not can_edit:
             return super().helpEvent(event, view, option, index)
         text = tooltip or index.data(Qt.ItemDataRole.DisplayRole) or ''
-        lines = [escape(str(text)).replace('\n', '<br>')] if text else []
+        # Let Qt wrap clip lists after their comma separators.
+        lines = [escape(str(text)).replace(',', ',\u200b').replace('\n', '<br>')] if text else []
         if can_edit:
             lines.append(escape(translate_text('Double-click to edit.')))
         if not lines:

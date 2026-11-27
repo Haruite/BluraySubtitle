@@ -818,7 +818,7 @@ I18N_ZH_TO_EN = {
     ' 个': ' items',
     ' 个字幕文件': ' subtitle files',
     '多进程解析失败，切换到单进程模式: ': 'Multiprocessing parse failed, switching to single-process: ',
-    '多进程解析失败，切换到单进程模式（mode）: ': 'Multiprocessing parse failed, switching to single-process mode: ',
+    '并行扫描字幕失败，切换到逐个扫描: ': 'Parallel subtitle scan failed, switching to sequential scanning: ',
     '配置为空，跳过更新': 'Configuration is empty, skipping update',
     '任务配置不能为空': 'Task configuration is empty',
     '任务配置为必填项': 'Task configuration is required',

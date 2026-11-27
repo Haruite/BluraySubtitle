@@ -172,13 +172,19 @@ class M2TS:
         remaining = None if max_bytes is None else max(int(max_bytes), 0)
         chunk_size = 4 * 1024 * 1024
         chunk_size -= chunk_size % stride
+        block_size = chunk_size
+        # Use a smaller initial block for head probes that may stop after a few packets.
+        if start_pos is None and (remaining is None or remaining >= 1024 * 1024):
+            block_size = 64 * 1024
+            block_size -= block_size % stride
         while remaining is None or remaining >= stride:
             if check_canceled is not None:
                 check_canceled()
-            read_size = chunk_size if remaining is None else min(chunk_size, remaining - remaining % stride)
+            read_size = block_size if remaining is None else min(block_size, remaining - remaining % stride)
             if read_size < stride:
                 break
             block = stream.read(read_size)
+            block_size = chunk_size
             complete_bytes = len(block) - len(block) % stride
             for offset in range(0, complete_bytes, stride):
                 packet = block[offset + sync_offset:offset + sync_offset + M2TS._TS_PACKET]

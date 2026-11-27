@@ -18,6 +18,8 @@ from .. import TaskCancelled, worker_process_context
 from ...core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE
 from ...core.i18n import translate_text
 from ...domain import Subtitle
+from ...domain.subtitles import ass_model
+from ...domain.subtitles.subtitle import ASS_EXTENSIONS
 from ...domain.subtitles import parse_subtitle_worker as _parse_subtitle_worker
 
 
@@ -79,26 +81,37 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         missing = [p for p in file_paths if p and p not in self._subtitle_cache]
         if not missing:
             return
-        try:
-            self._preload_subtitles_multiprocess(missing, cancel_event)
-        except TaskCancelled:
-            raise
-        except Exception as error:
-            print(f'Multiprocessing parse failed, switching to single-process mode: {str(error)}')
-        remaining = [path for path in missing if path not in self._subtitle_cache]
-        if remaining:
-            self._preload_subtitles_single(remaining, cancel_event)
+        local_extensions = ('.sup',) + (ASS_EXTENSIONS if ass_model.ass_native else ())
+        local = [path for path in missing if path.lower().endswith(local_extensions)]
+        parallel = [path for path in missing if not path.lower().endswith(local_extensions)]
+        if local:
+            self._preload_subtitles_single(local, cancel_event)
+        if parallel:
+            try:
+                self._preload_subtitles_multiprocess(parallel, cancel_event)
+            except TaskCancelled:
+                raise
+            except Exception as error:
+                print(f'Multiprocessing parse failed, switching to single-process mode: {str(error)}')
+            remaining = [path for path in parallel if path not in self._subtitle_cache]
+            if remaining:
+                self._preload_subtitles_single(remaining, cancel_event)
         unloaded = [path for path in missing if path not in self._subtitle_cache]
         if unloaded:
             raise ValueError(translate_text('Failed to load subtitle file: {path}').format(path=unloaded[0]))
 
     def _preload_subtitles_single(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
         """Parse subtitles in single-process mode."""
-        for p in file_paths:
+        def check_cancel():
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
+
+        for p in file_paths:
+            check_cancel()
             try:
-                self._subtitle_cache[p] = Subtitle(p)
+                self._subtitle_cache[p] = Subtitle(p, check_cancel=check_cancel)
+            except TaskCancelled:
+                raise
             except Exception as e:
                 print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
 
@@ -107,11 +120,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         if cancel_event and cancel_event.is_set():
             raise TaskCancelled()
         if len(file_paths) == 1:
-            p = file_paths[0]
-            try:
-                self._subtitle_cache[p] = Subtitle(p)
-            except Exception as e:
-                print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
+            self._preload_subtitles_single(file_paths, cancel_event)
             return
 
         if multiprocessing.current_process().name != 'MainProcess':

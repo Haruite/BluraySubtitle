@@ -130,13 +130,46 @@ class GetnativeWorkflowTests(unittest.TestCase):
             frame = Image.new("RGB", (512, 288), "white")
             frame.putpixel((0, 0), (0, 0, 0))
             frame.save(image_path)
-            with patch.object(encode_and_audio_tasks, "auto_getnative") as analyze:
-                result = encode_and_audio_tasks._estimate_native_from_image_worker(
-                    str(image_path), None,
-                )
+            with patch.object(encode_and_audio_tasks, "auto_getnative_batch") as analyze:
+                result = encode_and_audio_tasks._estimate_native_from_images_worker(
+                    {str(image_path): None}, None,
+                )[str(image_path)]
 
         analyze.assert_not_called()
         self.assertEqual(result.get("skip_reason"), "uniform_frame")
+
+    def test_unreadable_sample_does_not_discard_the_other_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            good = str(Path(temp_dir) / "good.png")
+            bad = str(Path(temp_dir) / "bad.png")
+            frame = Image.new("RGB", (960, 540), "white")
+            frame.putpixel((50, 50), (0, 0, 0))
+            frame.save(good)
+            frame.save(bad)
+
+            def analyze(images, **kwargs):
+                if bad in images:
+                    raise RuntimeError("sample decode failed")
+                return {
+                    good: {
+                        "getnative_height": 360.0,
+                        "getnative_kernel": "bilinear",
+                        "getnative_score": 2.0,
+                        "getnative_curve_valid": 1,
+                        "getnative_edge_hit": 0,
+                        "getnative_decreasing_ratio": 0.25,
+                    },
+                }
+
+            with patch.object(encode_and_audio_tasks, "auto_getnative_batch", side_effect=analyze):
+                results = encode_and_audio_tasks._estimate_native_from_images_worker(
+                    {good: None, bad: None}, None, vspipe_path="", plugin_path="",
+                )
+
+        self.assertTrue(results[good]["ok"])
+        self.assertEqual(results[good]["height"], 360.0)
+        self.assertFalse(results[bad]["ok"])
+        self.assertIn("sample decode failed", results[bad]["error"])
 
     def test_vpy_processing_values_patch_only_top_level_numeric_assignments(self) -> None:
         patch_value = vpy_edit_and_preview.VpyEditPreviewMixin._patch_vpy_processing_value_in_text

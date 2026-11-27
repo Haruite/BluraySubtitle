@@ -1,95 +1,124 @@
-import _io
 import struct
+
+
+_HEADER = struct.Struct('>2sIIBH')
+_CLOCKS = struct.Struct('>II')
+_CLOCK_RATE = 90000
+_CLOCK_MASK = 0xFFFFFFFF
+_MAX_PTS = 18000 * _CLOCK_RATE
+
+
+def _packet_headers(block):
+    offset = 0
+    while offset + _HEADER.size <= len(block):
+        magic, pts, dts, _, payload_size = _HEADER.unpack_from(block, offset)
+        end = offset + _HEADER.size + payload_size
+        if magic != b'PG' or end > len(block):
+            break
+        yield offset, end, pts, dts
+        offset = end
+
+
+class _EndTimestamps:
+    __slots__ = ('latest', 'previous')
+
+    def __init__(self):
+        self.latest = self.previous = -1
+
+    def add(self, pts):
+        if not 0 <= pts < _MAX_PTS:
+            return
+        if pts > self.latest:
+            self.previous, self.latest = self.latest, pts
+        elif self.previous < pts < self.latest:
+            self.previous = pts
+
+    def duration(self):
+        latest = max(self.latest, 0) / _CLOCK_RATE
+        previous = self.previous / _CLOCK_RATE
+        if self.previous >= 0 and previous < latest - 300:
+            return previous
+        return latest
+
+
+def _scan(block):
+    times = _EndTimestamps()
+    end = 0
+    for _, end, pts, _ in _packet_headers(block):
+        times.add(pts)
+    return end, times
 
 
 class PGS:
     def __init__(self, path):
-        self.raw = b""
-        self.packets = []
-        with open(path, 'rb') as f:
-            self.raw = f.read()
-        self._parse_packets()
-        self.max_end = self._compute_max_end()
+        with open(path, 'rb') as stream:
+            block = stream.read()
+        end, self._times = _scan(block)
+        # Published blocks are never mutated, so clones share their image data.
+        self._blocks = (block[:end],) if end else ()
 
-    def _parse_packets(self):
-        self.packets = []
-        i = 0
-        total = len(self.raw)
-        while i + 13 <= total:
-            if self.raw[i:i + 2] != b'PG':
-                break
-            pts, dts, seg_type, seg_size = struct.unpack('>IIBH', self.raw[i + 2:i + 13])
-            payload_start = i + 13
-            payload_end = payload_start + seg_size
-            if payload_end > total:
-                break
-            payload = self.raw[payload_start:payload_end]
-            self.packets.append({
-                "pts": pts,
-                "dts": dts,
-                "seg_type": seg_type,
-                "payload": payload,
-            })
-            i = payload_end
+    @staticmethod
+    def read_duration(path):
+        with open(path, 'rb') as stream:
+            _, times = _scan(stream.read())
+        return times.duration()
 
+    @property
+    def max_end(self):
+        return self._times.duration()
 
-    def _compute_max_end(self):
-        end_set = set(self.iter_timestamp())
-        if not end_set:
-            return 0
-        max_end = max(end_set)
-        end_set.remove(max_end)
-        if not end_set:
-            return max_end
-        max_end_1 = max(end_set)
-        if max_end_1 < max_end - 300:
-            return max_end_1
-        return max_end
+    def _shifted(self, offset):
+        offset &= _CLOCK_MASK
+        if not offset:
+            return self._blocks, self._times
+        blocks = []
+        times = _EndTimestamps()
+        for block in self._blocks:
+            patch = bytearray(block)
+            for start, _, pts, dts in _packet_headers(block):
+                pts = (pts + offset) & _CLOCK_MASK
+                _CLOCKS.pack_into(patch, start + 2, pts, (dts + offset) & _CLOCK_MASK)
+                times.add(pts)
+            blocks.append(patch)
+        return tuple(blocks), times
 
-    def iter_timestamp(self):
-        for packet in self.packets:
-            presentation_timestamp = packet["pts"] / 90000
-            if presentation_timestamp < 18000:
-                yield presentation_timestamp
-
-    def dump_file(self, fp: _io.BufferedWriter):
-        for packet in self.packets:
-            fp.write(
-                b'PG'
-                + struct.pack('>IIBH', packet["pts"], packet["dts"], packet["seg_type"], len(packet["payload"]))
-                + packet["payload"]
-            )
+    def shift(self, seconds):
+        self._blocks, self._times = self._shifted(round(seconds * _CLOCK_RATE))
 
     def append_pgs(self, other: 'PGS', shift_time: float):
-        if not hasattr(other, 'packets') or not other.packets:
-            return self
-        shift_pts = int(round(shift_time * 90000))
-        for packet in other.packets:
-            self.packets.append({
-                "pts": (packet["pts"] + shift_pts) & 0xFFFFFFFF,
-                "dts": (packet["dts"] + shift_pts) & 0xFFFFFFFF,
-                "seg_type": packet["seg_type"],
-                "payload": packet["payload"],
-            })
-        self.max_end = self._compute_max_end()
+        blocks, times = other._shifted(round(shift_time * _CLOCK_RATE))
+        combined = _EndTimestamps()
+        for pts in (self._times.latest, self._times.previous, times.latest, times.previous):
+            combined.add(pts)
+        self._blocks += blocks
+        self._times = combined
         return self
 
     def cut_pgs(self, start_time: float, end_time: float):
-        start_pts = int(round(start_time * 90000))
-        end_pts = int(round(end_time * 90000))
-        cut_packets = []
-        for packet in self.packets:
-            if packet["pts"] < start_pts or packet["pts"] > end_pts:
-                continue
-            cut_packets.append({
-                "pts": (packet["pts"] - start_pts) & 0xFFFFFFFF,
-                "dts": (packet["dts"] - start_pts) & 0xFFFFFFFF,
-                "seg_type": packet["seg_type"],
-                "payload": packet["payload"],
-            })
-        self.packets = cut_packets
-        self.max_end = self._compute_max_end()
+        start_pts = round(start_time * _CLOCK_RATE)
+        end_pts = round(end_time * _CLOCK_RATE)
+        times = _EndTimestamps()
+        blocks = []
+        for block in self._blocks:
+            source = memoryview(block)
+            cut = bytearray()
+            for start, end, pts, dts in _packet_headers(block):
+                if not start_pts <= pts <= end_pts:
+                    continue
+                offset = len(cut)
+                cut.extend(source[start:end])
+                pts = (pts - start_pts) & _CLOCK_MASK
+                _CLOCKS.pack_into(cut, offset + 2, pts, (dts - start_pts) & _CLOCK_MASK)
+                times.add(pts)
+            if cut:
+                blocks.append(cut)
+        self._blocks = tuple(blocks)
+        self._times = times
         return self
+
+    def dump_file(self, fp):
+        for block in self._blocks:
+            fp.write(block)
 
 
 __all__ = ["PGS"]

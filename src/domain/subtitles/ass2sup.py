@@ -25,6 +25,12 @@ except ModuleNotFoundError:
     from src.core.i18n import translate_text
     from src.core.tool_paths import active_tool_paths, resolve_tool_paths, tool_path
 
+from src.domain.subtitles.ass_model import ass_native
+
+
+_native = ass_native if hasattr(ass_native, 'composite_ass_images') else None
+
+
 # Declare the incomplete ctypes structure first so its fields can contain a pointer to the same type.
 class ASS_Image(ctypes.Structure):
     pass
@@ -56,6 +62,7 @@ class Event:
     start_frame: int
     end_frame: int
     crop: Crop
+    graphics: Optional[dict] = None
 
 
 @dataclass
@@ -64,6 +71,7 @@ class Segment:
     end_frame: int
     crop: Crop
     frame_hash: str
+    graphics: Optional[dict] = None
 
 
 G_LIB = None
@@ -74,7 +82,7 @@ G_WIDTH = 0
 G_HEIGHT = 0
 G_FPS_NUM = 0
 G_FPS_DEN = 1
-G_OUT_DIR = ""
+G_OUT_DIR: Optional[str] = None
 G_ASS_LOG_CB = None
 
 
@@ -339,7 +347,7 @@ def worker_cleanup():
 
 
 def init_worker(
-        in_path: str, out_dir: str, width: int, height: int, fps_num: int, fps_den: int,
+        in_path: str, out_dir: Optional[str], width: int, height: int, fps_num: int, fps_den: int,
         font_dir: Optional[str], libass_path: str,
 ):
     global G_LIB, G_ASS_LIB, G_RENDERER, G_TRACK, G_WIDTH, G_HEIGHT, G_FPS_NUM, G_FPS_DEN, G_OUT_DIR, G_ASS_LOG_CB
@@ -365,49 +373,58 @@ def init_worker(
     atexit.register(worker_cleanup)
 
 
+def _render_bitmap(head, width, height):
+    if _native:
+        result = _native.composite_ass_images(ctypes.cast(head, ctypes.c_void_p).value or 0, width, height)
+        if result is None:
+            return None
+        x, y, w, h, rgba = result
+        return Crop(x, y, w, h), rgba
+    cropped = crop_rgba(blend_ass_image_chain(head, width, height))
+    return (cropped[0], cropped[1].tobytes()) if cropped is not None else None
+
+
 def render_range(frame_range: Tuple[int, int]) -> List[Segment]:
     start, end = frame_range
     segments: List[Segment] = []
     segment_start = 0
     previous_hash = ''
     previous_crop: Optional[Crop] = None
-    previous_rgba: Optional[np.ndarray] = None
+    previous_rgba: Optional[bytes] = None
     changed_flag = ctypes.c_int(1)
+
+    def finish_segment(end_frame):
+        image = Image.frombuffer('RGBA', (previous_crop.w, previous_crop.h), previous_rgba, 'raw', 'RGBA', 0, 1)
+        graphics = None
+        if G_OUT_DIR is None:
+            graphics = _encode_graphics(image, previous_crop.x, previous_crop.y, False, G_WIDTH, G_HEIGHT)
+        else:
+            image.save(os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3)
+        segments.append(Segment(segment_start, end_frame, previous_crop, previous_hash, graphics))
 
     for frame_number in range(start, end):
         timestamp_ms = int(frame_number * G_FPS_DEN * 1000 / G_FPS_NUM)
         image_chain = G_LIB.ass_render_frame(G_RENDERER, G_TRACK, timestamp_ms, ctypes.byref(changed_flag))
-        if changed_flag.value == 0:
+        # Each task starts its own segment even when libass reused the previous task's masks.
+        if changed_flag.value == 0 and frame_number != start:
             continue
-        cropped = crop_rgba(blend_ass_image_chain(image_chain, G_WIDTH, G_HEIGHT))
+        cropped = _render_bitmap(image_chain, G_WIDTH, G_HEIGHT)
         if cropped is None:
-            if previous_crop is not None and previous_rgba is not None:
-                Image.fromarray(previous_rgba).save(
-                    os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3
-                )
-                segments.append(Segment(segment_start, frame_number, previous_crop, previous_hash))
+            if previous_crop is not None:
+                finish_segment(frame_number)
             previous_hash, previous_crop, previous_rgba = '', None, None
             continue
 
         crop, rgba = cropped
-        frame_hash = hashlib.blake2b(rgba.tobytes(), digest_size=16).hexdigest()
-        if previous_crop is None:
-            segment_start, previous_hash, previous_crop, previous_rgba = frame_number, frame_hash, crop, rgba
-            continue
+        frame_hash = hashlib.blake2b(rgba, digest_size=16).hexdigest()
         if frame_hash == previous_hash and crop == previous_crop:
             continue
-        if previous_rgba is not None:
-            Image.fromarray(previous_rgba).save(
-                os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3
-            )
-            segments.append(Segment(segment_start, frame_number, previous_crop, previous_hash))
+        if previous_crop is not None:
+            finish_segment(frame_number)
         segment_start, previous_hash, previous_crop, previous_rgba = frame_number, frame_hash, crop, rgba
 
-    if previous_crop is not None and previous_rgba is not None:
-        Image.fromarray(previous_rgba).save(
-            os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3
-        )
-        segments.append(Segment(segment_start, end, previous_crop, previous_hash))
+    if previous_crop is not None:
+        finish_segment(end)
     return segments
 
 
@@ -422,7 +439,26 @@ def merge_segments(chunks: List[List[Segment]]) -> List[Event]:
                 merged[-1].end_frame = max(merged[-1].end_frame, segment.end_frame)
             else:
                 merged.append(segment)
-    return [Event(segment.start_frame, segment.end_frame, segment.crop) for segment in merged]
+    return [Event(segment.start_frame, segment.end_frame, segment.crop, segment.graphics) for segment in merged]
+
+def _render_events(in_path, out_dir, width, height, fps_num, fps_den, font_dir, total_frames, jobs):
+    # Keep frame ranges small so animated sections do not leave one worker with a long tail.
+    chunk_size = max(24, int(round(fps_num / fps_den * 1.5)))
+    tasks = [(start, min(total_frames, start + chunk_size)) for start in range(0, total_frames, chunk_size)]
+    worker_args = (in_path, out_dir, width, height, fps_num, fps_den, font_dir, tool_path("LIBASS_PATH"))
+    if jobs == 1 or len(tasks) == 1:
+        try:
+            init_worker(*worker_args)
+            chunks = [render_range(task) for task in tasks]
+        finally:
+            worker_cleanup()
+    else:
+        with ProcessPoolExecutor(
+            max_workers=jobs, mp_context=get_context("spawn"), initializer=init_worker, initargs=worker_args,
+        ) as executor:
+            chunks = list(executor.map(render_range, tasks, chunksize=1))
+    return merge_segments(chunks), len(tasks)
+
 
 def main(argv: Optional[List[str]] = None, jobs: Optional[int] = None) -> int:
     parser = argparse.ArgumentParser(description=translate_text("ASS/SSA to BDN XML + PNG (Python + libass)"))
@@ -454,37 +490,13 @@ def main(argv: Optional[List[str]] = None, jobs: Optional[int] = None) -> int:
         return 1
 
     jobs = max(1, min(jobs or (os.cpu_count() or 1), total_frames))
-    # Very fine-grained chunks reduce tail latency from stragglers.
-    # Use about ~1.5s per task (minimum 24 frames) for better end-phase core utilization.
-    fps_float = fps_num / fps_den
-    chunk_size = max(24, int(round(fps_float * 1.5)))
-    tasks = []
-    for s in range(0, total_frames, chunk_size):
-        e = min(total_frames, s + chunk_size)
-        if s >= e:
-            break
-        tasks.append((s, e))
-
-    worker_args = (in_path, out_dir, width, height, fps_num, fps_den, args.font_dir, tool_path("LIBASS_PATH"))
     try:
-        if len(tasks) == 1:
-            init_worker(*worker_args)
-            chunks = [render_range(tasks[0])]
-            worker_cleanup()
-        else:
-            ctx = get_context("spawn")
-            with ProcessPoolExecutor(
-                max_workers=jobs,
-                mp_context=ctx,
-                initializer=init_worker,
-                initargs=worker_args,
-            ) as ex:
-                chunks = list(ex.map(render_range, tasks, chunksize=1))
+        events, task_count = _render_events(
+            in_path, out_dir, width, height, fps_num, fps_den, args.font_dir, total_frames, jobs,
+        )
     except KeyboardInterrupt:
         print(translate_text("Interrupted; workers terminated"), file=sys.stderr)
         return 130
-
-    events = merge_segments(chunks)
 
     write_bdn_xml(
         output_xml=out_xml,
@@ -498,7 +510,7 @@ def main(argv: Optional[List[str]] = None, jobs: Optional[int] = None) -> int:
         png_rel_dir=png_dir_name,
     )
 
-    print(translate_text("Done: {count} events -> {path} (jobs={jobs}, chunks={chunks})").format(count=len(events), path=out_xml, jobs=jobs, chunks=len(tasks)))
+    print(translate_text("Done: {count} events -> {path} (jobs={jobs}, chunks={chunks})").format(count=len(events), path=out_xml, jobs=jobs, chunks=task_count))
     return 0
 
 
@@ -602,23 +614,27 @@ def image_to_indexed_and_palette(image: Image.Image) -> Tuple[np.ndarray, List[T
                 )
         return remap[indexed], palette
 
-    rgba = np.array(image.convert('RGBA'), dtype=np.uint8)
-    alpha_channel = rgba[:, :, 3]
-    quantized = Image.fromarray(rgba).quantize(colors=254, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
-    indexed = np.array(quantized, dtype=np.uint8).astype(np.uint16) + 1
-    indexed[alpha_channel == 0] = 0
-    indexed = indexed.astype(np.uint8)
+    rgba = image if image.mode == 'RGBA' else image.convert('RGBA')
+    quantized = rgba.quantize(colors=254, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+    if _native:
+        indexes, alpha_maxima = _native.index_pgs_alpha(quantized.tobytes(), rgba.tobytes())
+        indexed = np.frombuffer(indexes, dtype=np.uint8).reshape(rgba.height, rgba.width)
+    else:
+        alpha_channel = np.asarray(rgba)[:, :, 3]
+        indexed = np.asarray(quantized) + 1
+        indexed[alpha_channel == 0] = 0
+        alpha_maxima = np.zeros(256, dtype=np.uint8)
+        np.maximum.at(alpha_maxima, indexed, alpha_channel)
     raw_palette = quantized.getpalette() or []
     palette = [(0, 0, 0, 0)] * 256
     for quantized_index in range(254):
         palette_index = quantized_index + 1
-        mask = indexed == palette_index
         offset = quantized_index * 3
         palette[palette_index] = (
             raw_palette[offset] if offset < len(raw_palette) else 0,
             raw_palette[offset + 1] if offset + 1 < len(raw_palette) else 0,
             raw_palette[offset + 2] if offset + 2 < len(raw_palette) else 0,
-            int(alpha_channel[mask].max()) if np.any(mask) else 0,
+            int(alpha_maxima[palette_index]),
         )
     return indexed, palette
 
@@ -635,6 +651,8 @@ def rgb_to_ycrcb(red: int, green: int, blue: int, image_height: int) -> Tuple[in
 
 def encode_rle(idx: np.ndarray) -> bytes:
     h, w = idx.shape
+    if _native and idx.dtype == np.uint8:
+        return _native.encode_pgs_rle(np.ascontiguousarray(idx), w, h)
     out = bytearray()
     for y in range(h):
         x = 0
@@ -671,15 +689,19 @@ def pgs_packet(seg_type: int, pts: int, dts: int, payload: bytes) -> bytes:
 
 def _build_graphics_payload(event: BdnEvent, video_width: int, video_height: int) -> dict:
     with Image.open(event.png_path) as image:
-        width, height = image.size
-        indexed, rgba_palette = image_to_indexed_and_palette(image)
+        return _encode_graphics(image, event.x, event.y, event.forced, video_width, video_height)
+
+
+def _encode_graphics(image: Image.Image, x: int, y: int, forced: bool, video_width: int, video_height: int) -> dict:
+    width, height = image.size
+    indexed, rgba_palette = image_to_indexed_and_palette(image)
     rle = encode_rle(indexed)
     palette_size = max(1, int(indexed.max()) + 1)
     palette_data = bytearray([0x00, 0x00])
     for palette_index in range(palette_size):
         red, green, blue, alpha = rgba_palette[palette_index]
-        y, cr, cb = rgb_to_ycrcb(red, green, blue, video_height)
-        palette_data += bytes([palette_index, y, cr, cb, alpha])
+        luma, cr, cb = rgb_to_ycrcb(red, green, blue, video_height)
+        palette_data += bytes([palette_index, luma, cr, cb, alpha])
 
     first_fragment_size = min(len(rle), 0xFFE4)
     object_data_length = len(rle) + 4
@@ -697,9 +719,9 @@ def _build_graphics_payload(event: BdnEvent, video_width: int, video_height: int
     return {
         'w': width,
         'h': height,
-        'x': event.x,
-        'y': event.y,
-        'forced': event.forced,
+        'x': x,
+        'y': y,
+        'forced': forced,
         'pds': bytes(palette_data),
         'ods_payloads': object_fragments,
         # Decode durations are the integer forms used by Spp2Pgs for 256/128 Mpixel/s paths.
@@ -792,16 +814,7 @@ def bdnxml_to_sup(xml_path: str, out_sup: str, jobs: int, bd_compat: str = 'off'
     if not document.events:
         print(translate_text('No events found in BDN XML'), file=sys.stderr)
         return 1
-    previous_end_frame = -1
-    for event_index, event in enumerate(document.events):
-        if event.end_frame <= event.start_frame:
-            raise ValueError(translate_text('Invalid BDN event timing at event {event}').format(event=event_index + 1))
-        if event.start_frame < previous_end_frame:
-            raise ValueError(translate_text(
-                'Overlapping BDN events are not supported (event {event})'
-            ).format(event=event_index + 1))
-        previous_end_frame = event.end_frame
-
+    _validate_timing(document.events)
     jobs = max(1, min(jobs, len(document.events)))
     frame_rate_id = fps_id_for(document.fps)
     if jobs > 1:
@@ -816,7 +829,23 @@ def bdnxml_to_sup(xml_path: str, out_sup: str, jobs: int, bd_compat: str = 'off'
         graphics_payloads = [
             _build_graphics_payload(event, document.width, document.height) for event in document.events
         ]
+    return _write_sup(document, graphics_payloads, out_sup, frame_rate_id, bd_compat, debug)
 
+
+def _validate_timing(events):
+    previous_end_frame = -1
+    for event_index, event in enumerate(events):
+        if event.end_frame <= event.start_frame:
+            raise ValueError(translate_text('Invalid BDN event timing at event {event}').format(event=event_index + 1))
+        if event.start_frame < previous_end_frame:
+            raise ValueError(translate_text(
+                'Overlapping BDN events are not supported (event {event})'
+            ).format(event=event_index + 1))
+        previous_end_frame = event.end_frame
+
+
+
+def _write_sup(document, graphics_payloads, out_sup, frame_rate_id, bd_compat, debug):
     composition_number = 0
     if bd_compat != 'on':
         with open(out_sup, 'wb') as output:
@@ -896,6 +925,37 @@ def bdnxml_to_sup(xml_path: str, out_sup: str, jobs: int, bd_compat: str = 'off'
         ), file=sys.stderr)
     return 0
 
+def _convert_direct(args) -> int:
+    if not os.path.isfile(args.input_ass):
+        print(translate_text("Input file not found: {path}").format(path=args.input_ass), file=sys.stderr)
+        return 1
+    width, height, _ = parse_video_format(args.video_format)
+    fps_num, fps_den, _, _ = parse_fps(args.fps)
+    fps = fps_num / fps_den
+    total_frames = estimate_total_frames(args.input_ass, fps_num, fps_den)
+    if total_frames <= 0:
+        print(translate_text("No dialogue events found"), file=sys.stderr)
+        return 1
+    jobs = max(1, min(args.jobs, total_frames))
+    frame_rate_id = fps_id_for(fps)
+    try:
+        events, _ = _render_events(
+            args.input_ass, None, width, height, fps_num, fps_den, args.font_dir, total_frames, jobs,
+        )
+    except KeyboardInterrupt:
+        print(translate_text("Interrupted; workers terminated"), file=sys.stderr)
+        return 130
+    if not events:
+        print(translate_text("No dialogue events found"), file=sys.stderr)
+        return 1
+    document = BdnDoc(width, height, fps, [
+        BdnEvent(event.start_frame, event.end_frame, False, event.crop.x, event.crop.y, '') for event in events
+    ])
+    _validate_timing(document.events)
+    return _write_sup(document, [event.graphics for event in events], args.output, frame_rate_id,
+                      args.bd_compat, args.bd_compat_debug)
+
+
 def _run_ass2sup_pipeline() -> int:
     parser = argparse.ArgumentParser(
         description=translate_text("ASS/SSA to SUP (embedded ass2bdnxml + bdnxml2sup)")
@@ -928,6 +988,12 @@ def _run_ass2sup_pipeline() -> int:
             input=args.input_ass, video_format=args.video_format, fps=args.fps,
             bd_compat=args.bd_compat, jobs=max(1, args.jobs),
         ), file=sys.stderr)
+
+    if _native and not args.keep_temp:
+        result = _convert_direct(args)
+        if result == 0:
+            print(translate_text("Done: {path}").format(path=args.output))
+        return result
 
     temp_root = tempfile.mkdtemp(prefix="ass2sup_")
     xml_tmp = os.path.join(temp_root, "intermediate.xml")

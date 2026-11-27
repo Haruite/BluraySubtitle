@@ -10,6 +10,7 @@ import tempfile
 import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.build_ass_extension import VERIFY_ASS_EXTENSION
 from tools.windows_native_tools import (
     PE_ARM64, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, clean_tool_environment, has_pe_machine,
     WIN7_QT_VERSION, WIN7_QT_SDK_VERSION, runtime_dependencies, verify_mkv_runtime, windows_machine,
@@ -52,6 +53,8 @@ def verify(bundle: Path, work: Path) -> None:
         raise RuntimeError(f"Expected the {package_name} package and executable")
     internal = bundle / "_internal"
     qt = internal / "PyQt6/Qt6"
+    if len(list(internal.glob("_bluraysubtitle_ass*.pyd"))) != 1:
+        raise RuntimeError("Expected one bundled ASS extension")
     binaries = [path for path in bundle.rglob("*") if path.suffix.lower() in {".exe", ".dll", ".pyd"}]
     for path in binaries:
         if not has_pe_machine(path):
@@ -130,6 +133,8 @@ def verify(bundle: Path, work: Path) -> None:
         )
     script = work / "bundled.vpy"
     script.write_text(
+        f"import sys\nsys.path.insert(0, {str(internal)!r})\n"
+        + VERIFY_ASS_EXTENSION + "\n"
         "import vapoursynth as vs\nimport mvsfunc\n"
         f"{clip_source}\n"
         "clip = vs.core.rgvs.RemoveGrain(clip, mode=1)\n"
